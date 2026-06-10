@@ -1,24 +1,82 @@
-# Python
+# ── Secrets & API Keys ────────────────────────────────────────────────────────
+.env
+.env.*
+.env.local
+.env.development
+.env.production
+*.env
+secrets.json
+secrets.yaml
+secrets.toml
+config.local.*
+api_keys.txt
+
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
-.env
-.venv
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual Environments ──────────────────────────────────────────────────────
+.venv/
 venv/
+env/
+ENV/
+.virtualenv/
 
-# Database
-backend/cryptobot.db
+# ── Database (contains user data & balances) ──────────────────────────────────
 *.db
+*.sqlite
+*.sqlite3
+backend/cryptobot.db
 
-# Frontend
+# ── Logs (may contain trade details & IPs) ────────────────────────────────────
+*.log
+*.log.*
+logs/
+backend/logs/
+
+# ── Frontend ──────────────────────────────────────────────────────────────────
 frontend/node_modules/
 frontend/dist/
+frontend/build/
 frontend/.vite/
+frontend/.cache/
 
-# OS
+# ── OS Files ──────────────────────────────────────────────────────────────────
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# IDE
+# ── IDE / Editor ──────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# ── Certificates & Keys ───────────────────────────────────────────────────────
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+
+# ── Backups ───────────────────────────────────────────────────────────────────
+*.bak
+*.backup
+*.old
