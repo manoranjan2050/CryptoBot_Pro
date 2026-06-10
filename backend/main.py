@@ -138,6 +138,11 @@ def init_db():
         "ALTER TABLE trades ADD COLUMN take_profit_pct REAL",
         "ALTER TABLE trades ADD COLUMN order_type TEXT DEFAULT 'MARKET'",
         "ALTER TABLE trades ADD COLUMN limit_price REAL",
+        "ALTER TABLE settings ADD COLUMN ai_provider TEXT DEFAULT 'anthropic'",
+        "ALTER TABLE settings ADD COLUMN groq_api_key TEXT",
+        "ALTER TABLE settings ADD COLUMN gemini_api_key TEXT",
+        "ALTER TABLE settings ADD COLUMN openrouter_api_key TEXT",
+        "ALTER TABLE settings ADD COLUMN ai_model TEXT",
     ]:
         try: c.execute(stmt)
         except: pass
@@ -929,6 +934,9 @@ class SettingsUpdate(BaseModel):
     email_username: Optional[str]=None; email_password: Optional[str]=None
     email_alerts_enabled: Optional[bool]=None; telegram_alerts_enabled: Optional[bool]=None
     anthropic_api_key: Optional[str]=None
+    ai_provider: Optional[str]=None; ai_model: Optional[str]=None
+    groq_api_key: Optional[str]=None; gemini_api_key: Optional[str]=None
+    openrouter_api_key: Optional[str]=None
 
 @app.get("/api/settings")
 def get_settings(user=Depends(current_user)):
@@ -938,6 +946,8 @@ def get_settings(user=Depends(current_user)):
     if d.get("binance_secret_key"): d["binance_secret_key"]="••••"+d["binance_secret_key"][-4:]
     if d.get("email_password"): d["email_password"]="••••••••"
     if d.get("anthropic_api_key"): d["anthropic_api_key"]="sk-ant-••••"+d["anthropic_api_key"][-4:]
+    for k in ("groq_api_key","gemini_api_key","openrouter_api_key"):
+        if d.get(k): d[k]="••••"+d[k][-4:]
     return d
 
 @app.put("/api/settings")
@@ -1038,24 +1048,69 @@ def daily_summary(user=Depends(current_user)):
 class ChatReq(BaseModel):
     messages: list; mode: str="demo"
 
+AI_SYSTEM = "You are CryptoBot Pro's AI trading advisor. Be concise and practical. Focus on EMA/RSI/MACD strategy, Binance, risk management, and demo vs live trading best practices."
+
+def _openai_compat(base_url, api_key, model, system, messages, extra_headers={}):
+    """Call any OpenAI-compatible API (Groq, OpenRouter, etc.)."""
+    body=json.dumps({"model":model,"max_tokens":1024,
+        "messages":[{"role":"system","content":system}]+list(messages)},
+        ensure_ascii=False).encode("utf-8")
+    r=requests.post(f"{base_url}/chat/completions",
+        headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json; charset=utf-8",**extra_headers},
+        data=body,timeout=30)
+    data=json.loads(r.content.decode("utf-8"))
+    if r.status_code!=200: raise HTTPException(400,data.get("error",{}).get("message","API error"))
+    return data["choices"][0]["message"]["content"]
+
+def _gemini(api_key, model, system, messages):
+    """Call Google Gemini API."""
+    contents=[{"role":"model" if m["role"]=="assistant" else "user","parts":[{"text":m["content"]}]} for m in messages]
+    body=json.dumps({"systemInstruction":{"parts":[{"text":system}]},"contents":contents,
+        "generationConfig":{"maxOutputTokens":1024}},ensure_ascii=False).encode("utf-8")
+    r=requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+        headers={"Content-Type":"application/json; charset=utf-8"},data=body,timeout=30)
+    data=json.loads(r.content.decode("utf-8"))
+    if r.status_code!=200: raise HTTPException(400,data.get("error",{}).get("message","Gemini error"))
+    return data["candidates"][0]["content"]["parts"][0]["text"]
+
 @app.post("/api/chat")
 def ai_chat(req: ChatReq, user=Depends(current_user)):
-    c=get_db(); s=c.execute("SELECT anthropic_api_key FROM settings WHERE user_id=?",(user["id"],)).fetchone(); c.close()
-    api_key=(s["anthropic_api_key"] if s and s["anthropic_api_key"] else None) or os.environ.get("ANTHROPIC_API_KEY","")
-    if not api_key: raise HTTPException(400,"No Anthropic API key — add it in Settings → AI Advisor tab")
+    c=get_db(); s=c.execute("SELECT * FROM settings WHERE user_id=?",(user["id"],)).fetchone(); c.close()
+    provider=(s and s["ai_provider"]) or "anthropic"
+    model_override=(s and s["ai_model"]) or None
+    system=f"{AI_SYSTEM} User is in {req.mode.upper()} mode."
     try:
-        body=json.dumps({"model":"claude-haiku-4-5-20251001","max_tokens":1024,
-              "system":f"You are CryptoBot Pro's AI trading advisor. User is in {req.mode.upper()} mode. Be concise and practical. Focus on EMA/RSI strategy, Binance, risk management, and demo vs live trading best practices.",
-              "messages":req.messages},ensure_ascii=False).encode("utf-8")
-        r=requests.post("https://api.anthropic.com/v1/messages",
-            headers={"x-api-key":api_key,"anthropic-version":"2023-06-01","content-type":"application/json; charset=utf-8"},
-            data=body,timeout=30)
-        data=json.loads(r.content.decode("utf-8"))
-        if r.status_code!=200: raise HTTPException(400,data.get("error",{}).get("message","AI error"))
-        return {"content":data["content"][0]["text"]}
+        if provider=="groq":
+            key=(s and s["groq_api_key"]) or ""
+            if not key: raise HTTPException(400,"No Groq API key — add it in Settings → AI Advisor (free at console.groq.com)")
+            model=model_override or "llama-3.3-70b-versatile"
+            return {"content":_openai_compat("https://api.groq.com/openai/v1",key,model,system,req.messages)}
+        elif provider=="openrouter":
+            key=(s and s["openrouter_api_key"]) or ""
+            if not key: raise HTTPException(400,"No OpenRouter API key — add it in Settings → AI Advisor (free at openrouter.ai)")
+            model=model_override or "meta-llama/llama-3.1-8b-instruct:free"
+            return {"content":_openai_compat("https://openrouter.ai/api/v1",key,model,system,req.messages,
+                extra_headers={"HTTP-Referer":"http://localhost:3000","X-Title":"CryptoBot Pro"})}
+        elif provider=="gemini":
+            key=(s and s["gemini_api_key"]) or ""
+            if not key: raise HTTPException(400,"No Gemini API key — add it in Settings → AI Advisor (free at aistudio.google.com)")
+            model=model_override or "gemini-1.5-flash"
+            return {"content":_gemini(key,model,system,req.messages)}
+        else:  # anthropic (default)
+            key=(s and s["anthropic_api_key"]) or os.environ.get("ANTHROPIC_API_KEY","")
+            if not key: raise HTTPException(400,"No Anthropic API key — add it in Settings → AI Advisor (or switch to Groq/Gemini free tier)")
+            model=model_override or "claude-haiku-4-5-20251001"
+            body=json.dumps({"model":model,"max_tokens":1024,"system":system,"messages":req.messages},
+                ensure_ascii=False).encode("utf-8")
+            r=requests.post("https://api.anthropic.com/v1/messages",
+                headers={"x-api-key":key,"anthropic-version":"2023-06-01","content-type":"application/json; charset=utf-8"},
+                data=body,timeout=30)
+            data=json.loads(r.content.decode("utf-8"))
+            if r.status_code!=200: raise HTTPException(400,data.get("error",{}).get("message","AI error"))
+            return {"content":data["content"][0]["text"]}
     except HTTPException: raise
     except UnicodeEncodeError as e:
-        raise HTTPException(500,f"Encoding error — try removing special characters from your message ({e})")
+        raise HTTPException(500,f"Encoding error ({e})")
     except Exception as e:
         raise HTTPException(500,str(e))
 

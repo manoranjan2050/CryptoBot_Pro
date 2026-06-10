@@ -1142,24 +1142,74 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
         </>}
 
         {/* ── AI ADVISOR TAB ── */}
-        {tab==="ai" && <>
-          <div className="flex items-start gap-3 p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-xl">
-            <Icon name="chat" size={16} className="text-cyan-400 flex-shrink-0 mt-0.5"/>
-            <p className="text-slate-300 text-sm">The AI Advisor uses Claude (Anthropic). Get an API key at <span className="text-cyan-400 font-medium">console.anthropic.com</span>. Your key is stored securely on the backend and never exposed in the browser.</p>
-          </div>
-          <Input label="Anthropic API Key" type="password" value={settings.anthropic_api_key?.startsWith("sk-ant")?"":settings.anthropic_api_key||""} onChange={v=>setSettings(s=>({...s,anthropic_api_key:v}))} placeholder="sk-ant-api03-…"/>
-          <SaveBtn dataKey="settings"/>
-          <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 text-xs space-y-2">
-            <p className="text-amber-300 font-semibold">Getting "credit balance too low" in AI chat?</p>
-            <p className="text-amber-300/80">The free tier has no ongoing credits. You need to purchase API credits to use Claude:</p>
-            <div className="space-y-1 text-amber-300/70">
-              <p>1. Go to <strong className="text-amber-300">console.anthropic.com → Settings → Billing</strong></p>
-              <p>2. Click <strong className="text-amber-300">Add Credits</strong> — minimum $5</p>
-              <p>3. Your existing API key will start working immediately after purchase</p>
-              <p>4. The AI Advisor uses <strong>claude-haiku</strong> — very cost-efficient (~$0.001 per message)</p>
+        {tab==="ai" && (()=>{
+          const provider=settings.ai_provider||"anthropic";
+          const setProvider=v=>setSettings(s=>({...s,ai_provider:v,ai_model:""}));
+          const PROVIDERS=[
+            {id:"groq",label:"Groq",badge:"FREE",color:"text-emerald-400",bg:"bg-emerald-500/15 border-emerald-500/30",
+              desc:"14,400 req/day free · Blazing fast Llama models",link:"console.groq.com",
+              models:["llama-3.3-70b-versatile","llama-3.1-8b-instant","mixtral-8x7b-32768","gemma2-9b-it"],
+              keyField:"groq_api_key",keyPlaceholder:"gsk_…",keyMask:v=>v?.startsWith("••")},
+            {id:"gemini",label:"Gemini",badge:"FREE",color:"text-blue-400",bg:"bg-blue-500/15 border-blue-500/30",
+              desc:"1M tokens/day free · Google's fastest model",link:"aistudio.google.com",
+              models:["gemini-1.5-flash","gemini-2.0-flash-lite","gemini-1.5-pro"],
+              keyField:"gemini_api_key",keyPlaceholder:"AIzaSy…",keyMask:v=>v?.startsWith("••")},
+            {id:"openrouter",label:"OpenRouter",badge:"FREE",color:"text-violet-400",bg:"bg-violet-500/15 border-violet-500/30",
+              desc:"20+ free models · Pick any LLM",link:"openrouter.ai",
+              models:["meta-llama/llama-3.1-8b-instruct:free","meta-llama/llama-3.3-70b-instruct:free","google/gemma-2-9b-it:free","microsoft/phi-3-mini-128k-instruct:free","qwen/qwen-2.5-7b-instruct:free"],
+              keyField:"openrouter_api_key",keyPlaceholder:"sk-or-…",keyMask:v=>v?.startsWith("••")},
+            {id:"anthropic",label:"Anthropic",badge:"PAID",color:"text-amber-400",bg:"bg-amber-500/15 border-amber-500/30",
+              desc:"Claude Haiku ~$0.001/msg · Best quality",link:"console.anthropic.com",
+              models:["claude-haiku-4-5-20251001","claude-sonnet-4-6"],
+              keyField:"anthropic_api_key",keyPlaceholder:"sk-ant-…",keyMask:v=>v?.startsWith("sk-ant")},
+          ];
+          const cur=PROVIDERS.find(p=>p.id===provider)||PROVIDERS[0];
+          const curKeyVal=settings[cur.keyField]||"";
+          const masked=cur.keyMask(curKeyVal);
+          return(<>
+            <p className="text-slate-400 text-sm">Choose your AI provider. Groq and Gemini are <strong className="text-emerald-400">completely free</strong> — no credit card needed.</p>
+            {/* Provider selector */}
+            <div className="grid grid-cols-2 gap-2">
+              {PROVIDERS.map(p=>(
+                <button key={p.id} onClick={()=>setProvider(p.id)}
+                  className={`p-3 rounded-xl border text-left transition-all ${provider===p.id?p.bg+" ring-1 ring-inset ring-current":"bg-slate-800 border-slate-700 hover:border-slate-600"}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`font-bold text-sm ${provider===p.id?p.color:"text-white"}`}>{p.label}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${p.badge==="FREE"?"bg-emerald-500/20 text-emerald-400":"bg-amber-500/20 text-amber-400"}`}>{p.badge}</span>
+                  </div>
+                  <p className="text-slate-400 text-xs leading-snug">{p.desc}</p>
+                </button>
+              ))}
             </div>
-          </div>
-        </>}
+            {/* API key for selected provider */}
+            <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className={`font-semibold text-sm ${cur.color}`}>{cur.label} API Key</span>
+                <span className="text-slate-500 text-xs">Get free key at <strong className="text-slate-300">{cur.link}</strong></span>
+              </div>
+              <input type="password" value={masked?"":curKeyVal}
+                onChange={e=>setSettings(s=>({...s,[cur.keyField]:e.target.value}))}
+                placeholder={cur.keyPlaceholder}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-cyan-500 transition-colors placeholder-slate-600"/>
+              {cur.id!=="anthropic" && <div className="text-xs space-y-1 text-slate-400">
+                {cur.id==="groq" && <><p>1. Go to <strong className="text-white">console.groq.com</strong> → Create account (free)</p><p>2. API Keys → Create new key → copy it</p><p>3. Paste above → Save → test in AI Advisor chat</p></>}
+                {cur.id==="gemini" && <><p>1. Go to <strong className="text-white">aistudio.google.com</strong> → Sign in with Google</p><p>2. Get API key → Create API key → copy it</p><p>3. Free: 1,500 req/day + 1M tokens/day on Flash</p></>}
+                {cur.id==="openrouter" && <><p>1. Go to <strong className="text-white">openrouter.ai</strong> → Sign up free</p><p>2. API Keys → Create key → copy it</p><p>3. Models ending in <strong className="text-violet-300">:free</strong> cost $0</p></>}
+              </div>}
+              {cur.id==="anthropic" && <p className="text-xs text-amber-300/70">Paid only. Min $5 credit. Use Groq or Gemini for free testing.</p>}
+            </div>
+            {/* Model selector */}
+            <div>
+              <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Model</label>
+              <select value={settings.ai_model||""} onChange={e=>setSettings(s=>({...s,ai_model:e.target.value}))}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-cyan-500 transition-colors appearance-none">
+                <option value="">Default ({cur.models[0]})</option>
+                {cur.models.map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <SaveBtn dataKey="settings"/>
+          </>);
+        })()}
 
         {/* ── TELEGRAM TAB ── */}
         {tab==="telegram" && <>
