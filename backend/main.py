@@ -131,6 +131,7 @@ def init_db():
         "ALTER TABLE settings ADD COLUMN anthropic_api_key TEXT",
         "ALTER TABLE users ADD COLUMN name TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'trader'",
+        "ALTER TABLE trades ADD COLUMN take_profit_pct REAL",
     ]:
         try: c.execute(stmt)
         except: pass
@@ -465,8 +466,9 @@ def place_trade(req: DemoTradeReq, user=Depends(current_user)):
     qty=round(req.amount_usdt/price,6)
     sl_pct=cfg["stop_loss_pct"] if cfg else 1.5
     c.execute("UPDATE funds SET demo_balance=? WHERE user_id=?",(balance-req.amount_usdt,user["id"]))
-    cur=c.execute("INSERT INTO trades (user_id,mode,pair,side,entry_price,quantity,status,strategy,trailing_stop_pct) VALUES (?,?,?,?,?,?,'open',?,?)",
-                  (user["id"],"demo",req.pair,req.side,price,qty,cfg["strategy"] if cfg else "MANUAL",sl_pct))
+    tp_pct=cfg["take_profit_pct"] if cfg else 3.0
+    cur=c.execute("INSERT INTO trades (user_id,mode,pair,side,entry_price,quantity,status,strategy,trailing_stop_pct,take_profit_pct) VALUES (?,?,?,?,?,?,'open',?,?,?)",
+                  (user["id"],"demo",req.pair,req.side,price,qty,cfg["strategy"] if cfg else "MANUAL",sl_pct,tp_pct))
     tid=cur.lastrowid; c.commit(); c.close()
     add_alert(user["id"],"info",f"📈 {'Bought' if req.side=='BUY' else 'Sold'} {req.pair} @ ${price:,.2f} — ${req.amount_usdt:.0f} USDT","demo")
     return {"trade_id":tid,"pair":req.pair,"side":req.side,"price":price,"quantity":qty,"amount_usdt":req.amount_usdt}
@@ -507,11 +509,157 @@ def open_trades(user=Depends(current_user)):
             unreal=((p-t["entry_price"])*qty) if t["side"]=="BUY" else ((t["entry_price"]-p)*qty)
             d["current_price"]=p; d["unrealized_pnl"]=round(unreal,4)
             d["unrealized_pct"]=round((unreal/(t["entry_price"]*qty))*100,2) if t["entry_price"]*qty else 0
-            if t["trailing_high"]:
-                sl=t["trailing_stop_pct"] or 1.5
-                d["stop_price"]=round(t["trailing_high"]*(1-sl/100),2)
+            sl=t["trailing_stop_pct"] or 1.5
+            tp=t["take_profit_pct"] or 3.0
+            trail_ref=t["trailing_high"] or t["entry_price"]
+            d["stop_price"]=round(trail_ref*(1-sl/100),2)
+            d["target_price"]=round(t["entry_price"]*(1+tp/100),2)
+            d["stop_loss_pct"]=sl; d["take_profit_pct"]=tp
+            d["margin_value"]=round(t["entry_price"]*qty,2)
+            d["current_value"]=round(p*qty,2)
         out.append(d)
     return out
+
+# ── TRADE SL/TP UPDATE ────────────────────────────────────────────────────────
+class SLTPUpdate(BaseModel):
+    stop_loss_pct: Optional[float]=None; take_profit_pct: Optional[float]=None
+
+@app.put("/api/demo/trade/{trade_id}/sltp")
+def update_trade_sltp(trade_id: int, req: SLTPUpdate, user=Depends(current_user)):
+    c=get_db()
+    t=c.execute("SELECT * FROM trades WHERE id=? AND user_id=? AND status='open'",(trade_id,user["id"])).fetchone()
+    if not t: c.close(); raise HTTPException(404,"Open trade not found")
+    if req.stop_loss_pct is not None and (req.stop_loss_pct<=0 or req.stop_loss_pct>=50):
+        c.close(); raise HTTPException(400,"Stop loss must be between 0% and 50%")
+    if req.take_profit_pct is not None and (req.take_profit_pct<=0 or req.take_profit_pct>=200):
+        c.close(); raise HTTPException(400,"Take profit must be between 0% and 200%")
+    updates={}
+    if req.stop_loss_pct is not None: updates["trailing_stop_pct"]=req.stop_loss_pct
+    if req.take_profit_pct is not None: updates["take_profit_pct"]=req.take_profit_pct
+    if updates:
+        c.execute(f"UPDATE trades SET {','.join(f'{k}=?' for k in updates)} WHERE id=?",(*updates.values(),trade_id))
+        c.commit()
+    t2=c.execute("SELECT * FROM trades WHERE id=?",(trade_id,)).fetchone(); c.close()
+    entry=t2["entry_price"]; sl=t2["trailing_stop_pct"] or 1.5; tp=t2["take_profit_pct"] or 3.0
+    add_alert(user["id"],"info",f"✏️ Updated {t2['pair']} — SL: {sl}% | TP: {tp}%","demo")
+    return {"trade_id":trade_id,"stop_loss_pct":sl,"take_profit_pct":tp,
+            "stop_price":round(entry*(1-sl/100),2),"target_price":round(entry*(1+tp/100),2)}
+
+# ── BACKTEST ──────────────────────────────────────────────────────────────────
+def fetch_historical_klines(symbol, interval, start_ms, end_ms):
+    all_klines=[]; current=start_ms
+    while current<end_ms:
+        try:
+            r=requests.get("https://api.binance.com/api/v3/klines",
+                params={"symbol":symbol,"interval":interval,"startTime":current,"endTime":end_ms,"limit":1000},
+                timeout=15).json()
+            if not isinstance(r,list) or not r: break
+            all_klines.extend(r)
+            if len(r)<1000: break
+            current=r[-1][0]+1
+        except Exception as e:
+            print(f"Binance klines error: {e}"); break
+    return all_klines
+
+class BacktestReq(BaseModel):
+    symbol: str="BTCUSDT"; interval: str="1h"
+    start_date: str; end_date: str
+    initial_balance: float=10000; trade_amount: float=500
+    ema_fast: int=21; ema_slow: int=55; rsi_period: int=14
+    rsi_buy_min: float=45; rsi_buy_max: float=65
+    stop_loss_pct: float=1.5; take_profit_pct: float=3.0
+
+@app.post("/api/backtest")
+def run_backtest(req: BacktestReq, user=Depends(current_user)):
+    try:
+        start_dt=datetime.strptime(req.start_date,"%Y-%m-%d")
+        end_dt=datetime.strptime(req.end_date,"%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400,"Invalid date — use YYYY-MM-DD")
+    start_ms=int(start_dt.timestamp()*1000); end_ms=int(end_dt.timestamp()*1000)
+    if end_ms<=start_ms: raise HTTPException(400,"End date must be after start date")
+    if (end_ms-start_ms)>730*86400*1000: raise HTTPException(400,"Maximum range is 2 years")
+    if req.ema_fast>=req.ema_slow: raise HTTPException(400,"EMA fast must be less than EMA slow")
+    if req.trade_amount<=0 or req.trade_amount>req.initial_balance: raise HTTPException(400,"Trade amount must be > 0 and ≤ initial balance")
+
+    klines=fetch_historical_klines(req.symbol.upper(),req.interval,start_ms,end_ms)
+    min_c=req.ema_slow+req.rsi_period+5
+    if len(klines)<min_c: raise HTTPException(400,f"Not enough data — {len(klines)} candles fetched, need ≥ {min_c}. Try a wider date range or larger interval.")
+
+    closes=[float(k[4]) for k in klines]
+    highs=[float(k[2]) for k in klines]
+    lows=[float(k[3]) for k in klines]
+    times=[k[0] for k in klines]
+
+    ema_f=calc_ema(closes,req.ema_fast); ema_s=calc_ema(closes,req.ema_slow)
+    offset_fast=req.ema_slow-req.ema_fast
+    balance=req.initial_balance; position=None
+    trades=[]; equity_curve=[]; peak_balance=balance; max_drawdown=0.0
+
+    for j in range(1,len(ema_s)):
+        i=j+req.ema_slow-1
+        if i>=len(closes): break
+        close=closes[i]; high=highs[i]; low=lows[i]
+        dt_str=datetime.utcfromtimestamp(times[i]/1000).strftime("%Y-%m-%d %H:%M")
+
+        if position:
+            exit_price=None; exit_reason=None
+            if low<=position["stop"]: exit_price=position["stop"]; exit_reason="stop_loss"
+            elif high>=position["target"]: exit_price=position["target"]; exit_reason="take_profit"
+            if exit_reason:
+                qty=position["quantity"]
+                pnl=(exit_price-position["entry"])*qty
+                pnl_pct=((exit_price-position["entry"])/position["entry"])*100
+                balance+=position["entry"]*qty+pnl
+                trades.append({"entry_date":position["entry_time"],"exit_date":dt_str,"side":"BUY",
+                    "entry_price":round(position["entry"],2),"exit_price":round(exit_price,2),
+                    "quantity":round(qty,6),"pnl":round(pnl,4),"pnl_pct":round(pnl_pct,2),"exit_reason":exit_reason})
+                position=None
+                peak_balance=max(peak_balance,balance)
+                max_drawdown=max(max_drawdown,((peak_balance-balance)/peak_balance)*100)
+
+        if not position:
+            ef_c=ema_f[j+offset_fast]; ef_p=ema_f[j+offset_fast-1]
+            es_c=ema_s[j]; es_p=ema_s[j-1]
+            rsi=calc_rsi(closes[max(0,i-req.rsi_period*3):i+1],req.rsi_period)
+            if ef_c>es_c and ef_p<=es_p and req.rsi_buy_min<=rsi<=req.rsi_buy_max and req.trade_amount<=balance:
+                qty=req.trade_amount/close; balance-=req.trade_amount
+                position={"entry":close,"quantity":qty,"entry_time":dt_str,
+                    "stop":close*(1-req.stop_loss_pct/100),"target":close*(1+req.take_profit_pct/100)}
+
+        unreal=(close-position["entry"])*position["quantity"] if position else 0
+        eq_val=balance+(position["entry"]*position["quantity"] if position else 0)+unreal
+        equity_curve.append({"date":dt_str,"balance":round(eq_val,2)})
+
+    if position:
+        close=closes[-1]; qty=position["quantity"]
+        pnl=(close-position["entry"])*qty
+        pnl_pct=((close-position["entry"])/position["entry"])*100
+        balance+=position["entry"]*qty+pnl
+        trades.append({"entry_date":position["entry_time"],"exit_date":datetime.utcfromtimestamp(times[-1]/1000).strftime("%Y-%m-%d %H:%M"),
+            "side":"BUY","entry_price":round(position["entry"],2),"exit_price":round(close,2),
+            "quantity":round(qty,6),"pnl":round(pnl,4),"pnl_pct":round(pnl_pct,2),"exit_reason":"period_end"})
+
+    pnls=[t["pnl"] for t in trades]
+    wins=[p for p in pnls if p>0]; losses=[p for p in pnls if p<=0]
+    if len(equity_curve)>600:
+        step=max(1,len(equity_curve)//600); equity_curve=equity_curve[::step]
+
+    return {
+        "symbol":req.symbol.upper(),"interval":req.interval,
+        "start_date":req.start_date,"end_date":req.end_date,"candles_used":len(klines),
+        "initial_balance":req.initial_balance,"final_balance":round(balance,2),
+        "total_return_pct":round((balance-req.initial_balance)/req.initial_balance*100,2),
+        "total_pnl":round(sum(pnls),2),"total_trades":len(trades),
+        "winning_trades":len(wins),"losing_trades":len(losses),
+        "win_rate":round(len(wins)/len(trades)*100,1) if trades else 0,
+        "avg_pnl":round(sum(pnls)/len(pnls),2) if pnls else 0,
+        "best_trade":round(max(pnls),2) if pnls else 0,
+        "worst_trade":round(min(pnls),2) if pnls else 0,
+        "max_drawdown_pct":round(max_drawdown,2),
+        "profit_factor":round(sum(wins)/abs(sum(losses)),2) if losses and sum(losses)!=0 else 0,
+        "trades":trades,"equity_curve":equity_curve,
+    }
 
 # ── BOT ───────────────────────────────────────────────────────────────────────
 class BotUpdate(BaseModel):

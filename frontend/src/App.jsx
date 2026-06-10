@@ -367,6 +367,9 @@ const TradingPage = ({ token, mode }) => {
   const [msg,setMsg]=useState(null);
   const [loading,setLoading]=useState(false);
   const [closingId,setClosingId]=useState(null);
+  const [editTrade,setEditTrade]=useState(null);
+  const [editForm,setEditForm]=useState({stop_loss_pct:"",take_profit_pct:""});
+  const [editSaving,setEditSaving]=useState(false);
 
   const PAIRS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT"];
 
@@ -403,6 +406,20 @@ const TradingPage = ({ token, mode }) => {
     if (!window.confirm(`Reset demo to $${(funds.demo_initial||10000).toLocaleString()}? All trades cleared.`)) return;
     const res = await api("/api/funds/reset-demo",{method:"POST"},token);
     if (res.balance) { setMsg({ok:true,text:`✅ Demo reset to $${res.balance.toLocaleString()}`}); load(); }
+  };
+
+  const openEdit = (t) => {
+    setEditTrade(t);
+    setEditForm({stop_loss_pct: t.stop_loss_pct||1.5, take_profit_pct: t.take_profit_pct||3.0});
+  };
+
+  const saveSlTp = async () => {
+    if (!editTrade) return;
+    setEditSaving(true);
+    const res = await api(`/api/demo/trade/${editTrade.id}/sltp`,{method:"PUT",body:JSON.stringify({stop_loss_pct:parseFloat(editForm.stop_loss_pct)||undefined,take_profit_pct:parseFloat(editForm.take_profit_pct)||undefined})},token);
+    if (res.trade_id) { setMsg({ok:true,text:`✅ ${editTrade.pair} — SL: ${res.stop_loss_pct}% ($${res.stop_price}) | TP: ${res.take_profit_pct}% ($${res.target_price})`}); setEditTrade(null); load(); }
+    else setMsg({ok:false,text:res.detail||"Update failed"});
+    setEditSaving(false);
   };
 
   const balance = mode==="demo"?funds.demo_balance:funds.live_balance;
@@ -503,41 +520,132 @@ const TradingPage = ({ token, mode }) => {
 
         {/* RIGHT: Positions */}
         <div className="lg:col-span-2 space-y-5">
+          {/* Edit SL/TP Modal */}
+          {editTrade && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+              <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+                <div className="flex items-center justify-between mb-5">
+                  <div>
+                    <h3 className="text-white font-bold text-lg">Edit Position</h3>
+                    <p className="text-slate-400 text-sm mt-0.5">{editTrade.pair} · Entry ${editTrade.entry_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</p>
+                  </div>
+                  <button onClick={()=>setEditTrade(null)} className="text-slate-500 hover:text-white w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-800 transition-colors text-lg">✕</button>
+                </div>
+
+                <div className="bg-slate-800 rounded-xl p-3 mb-4 grid grid-cols-2 gap-3 text-xs text-center">
+                  <div><div className="text-slate-500">Current Price</div><div className="text-white font-bold text-base">${editTrade.current_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div></div>
+                  <div><div className="text-slate-500">Unrealized PnL</div><div className={`font-bold text-base ${(editTrade.unrealized_pnl||0)>=0?"text-green-400":"text-red-400"}`}>{(editTrade.unrealized_pnl||0)>=0?"+":""}${(editTrade.unrealized_pnl||0).toFixed(2)}</div></div>
+                  <div><div className="text-slate-500">Margin</div><div className="text-amber-400 font-semibold">${editTrade.margin_value?.toLocaleString()}</div></div>
+                  <div><div className="text-slate-500">Current Value</div><div className="text-cyan-400 font-semibold">${editTrade.current_value?.toLocaleString()}</div></div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Stop Loss %</label>
+                    <input type="number" step="0.1" min="0.1" max="49" value={editForm.stop_loss_pct} onChange={e=>setEditForm(f=>({...f,stop_loss_pct:e.target.value}))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-red-500 transition-colors"/>
+                    {editTrade.entry_price&&editForm.stop_loss_pct&&(
+                      <p className="text-red-400 text-xs mt-1">Stop at <span className="font-semibold">${(editTrade.entry_price*(1-parseFloat(editForm.stop_loss_pct)/100)).toFixed(2)}</span></p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Take Profit %</label>
+                    <input type="number" step="0.1" min="0.1" max="199" value={editForm.take_profit_pct} onChange={e=>setEditForm(f=>({...f,take_profit_pct:e.target.value}))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-green-500 transition-colors"/>
+                    {editTrade.entry_price&&editForm.take_profit_pct&&(
+                      <p className="text-green-400 text-xs mt-1">Target at <span className="font-semibold">${(editTrade.entry_price*(1+parseFloat(editForm.take_profit_pct)/100)).toFixed(2)}</span></p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex gap-3 mt-5">
+                  <button onClick={()=>setEditTrade(null)} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white py-2.5 rounded-xl font-medium text-sm transition-colors">Cancel</button>
+                  <button onClick={saveSlTp} disabled={editSaving} className="flex-1 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white py-2.5 rounded-xl font-bold text-sm transition-all disabled:opacity-50">
+                    {editSaving?"Saving…":"Update"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Open positions */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white font-semibold">Open Positions <span className="text-slate-500 font-normal text-sm">({openTrades.length}/{funds.max_open_trades||3})</span></h3>
-              <span className="text-slate-500 text-xs">Auto-refreshes every 8s</span>
+              <span className="text-slate-500 text-xs">Live · refreshes every 8s</span>
             </div>
             {openTrades.length===0?(
               <div className="text-center py-8 text-slate-600">
                 <div className="text-3xl mb-2">📊</div>
-                <p className="text-sm">No open positions — place a {mode==="demo"?"paper":"live"} trade</p>
+                <p className="text-sm">No open positions</p>
               </div>
             ):(
               <div className="space-y-3">
-                {openTrades.map(t=>(
-                  <div key={t.id} className="bg-slate-800 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap">
-                    <div className="flex items-center gap-3">
-                      <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${t.side==="BUY"?"bg-green-500/20 text-green-400":"bg-red-500/20 text-red-400"}`}>{t.side}</span>
-                      <div>
-                        <div className="text-white font-semibold text-sm">{t.pair}</div>
-                        <div className="text-slate-500 text-xs">Entry ${t.entry_price?.toLocaleString(undefined,{maximumFractionDigits:2})} · {t.quantity} qty</div>
+                {openTrades.map(t=>{
+                  const pnl=t.unrealized_pnl||0; const pct=t.unrealized_pct||0;
+                  const isProfit=pnl>=0;
+                  return (
+                    <div key={t.id} className={`rounded-xl border p-4 transition-all ${isProfit?"border-green-500/20 bg-green-500/5":"border-red-500/20 bg-red-500/5"}`}>
+                      {/* Top row */}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2.5">
+                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${t.side==="BUY"?"bg-green-500/20 text-green-400":"bg-red-500/20 text-red-400"}`}>{t.side}</span>
+                          <span className="text-white font-bold">{t.pair}</span>
+                          <span className="text-slate-500 text-xs">#{t.id}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button onClick={()=>openEdit(t)} className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-cyan-500/10 text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-500/30 rounded-lg transition-all font-medium">
+                            ✏️ Edit
+                          </button>
+                          <button onClick={()=>closeTrade(t.id)} disabled={closingId===t.id}
+                            className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-red-500/10 text-slate-400 hover:text-red-400 border border-slate-700 hover:border-red-500/30 rounded-lg transition-all font-medium disabled:opacity-50">
+                            {closingId===t.id?"…":"Close"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Live PnL — big display */}
+                      <div className="flex items-end justify-between mb-3">
+                        <div>
+                          <div className="text-slate-500 text-xs mb-0.5">Unrealized PnL</div>
+                          <div className={`text-2xl font-bold tracking-tight ${isProfit?"text-green-400":"text-red-400"}`}>
+                            {isProfit?"+":""}${pnl.toFixed(2)}
+                          </div>
+                          <div className={`text-sm font-semibold ${isProfit?"text-green-500":"text-red-500"}`}>
+                            {isProfit?"+":""}{pct.toFixed(2)}%
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-slate-500 text-xs mb-0.5">Current Price</div>
+                          <div className="text-white font-bold text-lg">${t.current_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
+                          <div className="text-slate-500 text-xs">{t.current_value?`Value $${t.current_value?.toLocaleString(undefined,{maximumFractionDigits:2})}`:""}</div>
+                        </div>
+                      </div>
+
+                      {/* Position details grid */}
+                      <div className="grid grid-cols-4 gap-2 text-xs bg-slate-800/60 rounded-lg p-2.5">
+                        <div className="text-center">
+                          <div className="text-slate-500 mb-0.5">Entry</div>
+                          <div className="text-white font-medium">${t.entry_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
+                        </div>
+                        <div className="text-center">
+                          <div className="text-slate-500 mb-0.5">Margin</div>
+                          <div className="text-amber-400 font-semibold">${t.margin_value?.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+                        </div>
+                        <div className="text-center">
+                          <div className="text-slate-500 mb-0.5">Stop Loss</div>
+                          <div className="text-red-400 font-semibold">${t.stop_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
+                          <div className="text-slate-600">{t.stop_loss_pct}%</div>
+                        </div>
+                        <div className="text-center">
+                          <div className="text-slate-500 mb-0.5">Target</div>
+                          <div className="text-green-400 font-semibold">${t.target_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
+                          <div className="text-slate-600">{t.take_profit_pct}%</div>
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        <div className={`font-bold text-sm ${(t.unrealized_pnl||0)>=0?"text-green-400":"text-red-400"}`}>{(t.unrealized_pnl||0)>=0?"+":""}${(t.unrealized_pnl||0).toFixed(2)}</div>
-                        <div className={`text-xs ${(t.unrealized_pct||0)>=0?"text-green-500":"text-red-500"}`}>{(t.unrealized_pct||0)>=0?"+":""}{(t.unrealized_pct||0).toFixed(2)}%</div>
-                        {t.current_price&&<div className="text-slate-600 text-xs">now ${t.current_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>}
-                      </div>
-                      <button onClick={()=>closeTrade(t.id)} disabled={closingId===t.id}
-                        className="bg-slate-700 hover:bg-red-500/20 hover:text-red-400 text-slate-400 text-xs px-4 py-2 rounded-lg border border-slate-600 hover:border-red-500/30 transition-all font-medium disabled:opacity-50">
-                        {closingId===t.id?"…":"Close"}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1015,6 +1123,185 @@ const ChatPage = ({ token, user, mode }) => {
   );
 };
 
+// ── EQUITY CHART ──────────────────────────────────────────────────────────────
+const EquityChart = ({ data, initial }) => {
+  if (!data?.length) return <div className="flex items-center justify-center h-full text-slate-500 text-sm">No data</div>;
+  const vals=data.map(d=>d.balance);
+  const minV=Math.min(...vals)*0.998, maxV=Math.max(...vals)*1.002, range=maxV-minV||1;
+  const w=700,h=180,toY=v=>h-((v-minV)/range)*(h-20)-10,toX=i=>(i/(data.length-1||1))*w;
+  const pts=data.map((d,i)=>`${toX(i)},${toY(d.balance)}`).join(" ");
+  const initY=toY(initial||vals[0]);
+  const isProfit=vals[vals.length-1]>=(initial||vals[0]);
+  const col=isProfit?"#22c55e":"#ef4444";
+  return (
+    <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full">
+      <defs><linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={col} stopOpacity="0.2"/><stop offset="100%" stopColor={col} stopOpacity="0"/></linearGradient></defs>
+      <line x1="0" y1={initY} x2={w} y2={initY} stroke="#475569" strokeWidth="1" strokeDasharray="4"/>
+      <polygon points={`0,${h} ${pts} ${w},${h}`} fill="url(#eqGrad)"/>
+      <polyline points={pts} fill="none" stroke={col} strokeWidth="2"/>
+    </svg>
+  );
+};
+
+// ── BACKTEST ──────────────────────────────────────────────────────────────────
+const BacktestPage = ({ token }) => {
+  const today=new Date().toISOString().split("T")[0];
+  const sixMonthsAgo=new Date(Date.now()-180*86400*1000).toISOString().split("T")[0];
+  const [cfg,setCfg]=useState({symbol:"BTCUSDT",interval:"1h",start_date:sixMonthsAgo,end_date:today,
+    initial_balance:10000,trade_amount:500,ema_fast:21,ema_slow:55,rsi_period:14,
+    rsi_buy_min:45,rsi_buy_max:65,stop_loss_pct:1.5,take_profit_pct:3.0});
+  const [results,setResults]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+
+  const runBacktest=async()=>{
+    setLoading(true); setError(null); setResults(null);
+    const res=await api("/api/backtest",{method:"POST",body:JSON.stringify(cfg)},token);
+    if(res.total_trades!==undefined) setResults(res);
+    else setError(res.detail||"Backtest failed");
+    setLoading(false);
+  };
+
+  const S=({label,value,color="text-white",sub})=>(
+    <div className="bg-slate-800 rounded-xl p-4 text-center">
+      <div className={`font-bold text-xl ${color}`}>{value}</div>
+      <div className="text-slate-500 text-xs mt-1">{label}</div>
+      {sub&&<div className="text-slate-600 text-xs mt-0.5">{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-white text-2xl font-bold">Backtesting</h1>
+        <p className="text-slate-500 text-sm mt-0.5">Replay your strategy on real Binance historical data</p>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Config panel */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+          <h3 className="text-white font-semibold">Configuration</h3>
+          <Select label="Symbol" value={cfg.symbol} onChange={v=>setCfg(c=>({...c,symbol:v}))} options={["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT"].map(s=>({value:s,label:s.replace("USDT","/USDT")}))}/>
+          <Select label="Candle Interval" value={cfg.interval} onChange={v=>setCfg(c=>({...c,interval:v}))} options={[{value:"15m",label:"15 Minutes"},{value:"1h",label:"1 Hour (recommended)"},{value:"4h",label:"4 Hours"},{value:"1d",label:"1 Day"}]}/>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Start Date</label>
+              <input type="date" style={{colorScheme:"dark"}} value={cfg.start_date} onChange={e=>setCfg(c=>({...c,start_date:e.target.value}))}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:border-cyan-500 transition-colors"/>
+            </div>
+            <div>
+              <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">End Date</label>
+              <input type="date" style={{colorScheme:"dark"}} value={cfg.end_date} onChange={e=>setCfg(c=>({...c,end_date:e.target.value}))}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:border-cyan-500 transition-colors"/>
+            </div>
+          </div>
+          <Input label="Starting Balance (USDT)" type="number" value={cfg.initial_balance} onChange={v=>setCfg(c=>({...c,initial_balance:v}))}/>
+          <Input label="Trade Size per Signal (USDT)" type="number" value={cfg.trade_amount} onChange={v=>setCfg(c=>({...c,trade_amount:v}))}/>
+          <div className="border-t border-slate-700 pt-4">
+            <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">Strategy Parameters</p>
+            <div className="grid grid-cols-2 gap-2">
+              <Input label="EMA Fast" type="number" value={cfg.ema_fast} onChange={v=>setCfg(c=>({...c,ema_fast:v}))}/>
+              <Input label="EMA Slow" type="number" value={cfg.ema_slow} onChange={v=>setCfg(c=>({...c,ema_slow:v}))}/>
+              <Input label="RSI Period" type="number" value={cfg.rsi_period} onChange={v=>setCfg(c=>({...c,rsi_period:v}))}/>
+              <Input label="RSI Buy Min" type="number" value={cfg.rsi_buy_min} onChange={v=>setCfg(c=>({...c,rsi_buy_min:v}))}/>
+              <Input label="RSI Buy Max" type="number" value={cfg.rsi_buy_max} onChange={v=>setCfg(c=>({...c,rsi_buy_max:v}))}/>
+              <div/>
+              <Input label="Stop Loss %" type="number" value={cfg.stop_loss_pct} onChange={v=>setCfg(c=>({...c,stop_loss_pct:v}))}/>
+              <Input label="Take Profit %" type="number" value={cfg.take_profit_pct} onChange={v=>setCfg(c=>({...c,take_profit_pct:v}))}/>
+            </div>
+          </div>
+          {error&&<div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-red-400 text-sm flex items-start gap-2"><Icon name="warning" size={14} className="flex-shrink-0 mt-0.5"/>{error}</div>}
+          <button onClick={runBacktest} disabled={loading}
+            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white font-semibold py-3 rounded-xl text-sm transition-all disabled:opacity-50 shadow-lg shadow-cyan-500/10">
+            {loading?<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>Fetching from Binance…</>:<><Icon name="play" size={16}/>Run Backtest</>}
+          </button>
+          <p className="text-slate-600 text-xs text-center">Live OHLCV data via Binance API · max 2 years</p>
+        </div>
+
+        {/* Results panel */}
+        <div className="lg:col-span-2 space-y-4">
+          {!results&&!loading&&(
+            <div className="bg-slate-900 border border-slate-800 rounded-xl flex flex-col items-center justify-center text-center p-12 min-h-64">
+              <div className="w-16 h-16 bg-slate-800 rounded-2xl flex items-center justify-center mb-4"><Icon name="analytics" size={30} className="text-slate-600"/></div>
+              <div className="text-slate-400 font-semibold text-lg">Ready to Backtest</div>
+              <p className="text-slate-600 text-sm mt-2 max-w-xs">Configure strategy parameters and click Run Backtest to simulate against real Binance historical data.</p>
+            </div>
+          )}
+          {loading&&(
+            <div className="bg-slate-900 border border-slate-800 rounded-xl flex flex-col items-center justify-center text-center p-12 min-h-64 gap-5">
+              <div className="w-14 h-14 border-4 border-cyan-500/20 border-t-cyan-500 rounded-full animate-spin"/>
+              <div><div className="text-white font-semibold text-lg">Running Backtest</div><p className="text-slate-500 text-sm mt-1">Fetching historical candles from Binance…</p></div>
+            </div>
+          )}
+          {results&&(<>
+            {/* Summary metrics */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <StatCard label="Total Return" value={`${results.total_return_pct>=0?"+":""}${results.total_return_pct}%`} sub={`$${results.initial_balance.toLocaleString()} → $${results.final_balance.toLocaleString()}`} icon="trend_up" color={results.total_return_pct>=0?"green":"red"}/>
+              <StatCard label="Win Rate" value={`${results.win_rate}%`} sub={`${results.winning_trades}W / ${results.losing_trades}L`} icon="chart" color={results.win_rate>=50?"violet":"amber"}/>
+              <StatCard label="Total Trades" value={results.total_trades} sub={`${results.candles_used.toLocaleString()} candles`} icon="trade" color="cyan"/>
+              <StatCard label="Max Drawdown" value={`-${results.max_drawdown_pct}%`} sub={`PF: ${results.profit_factor}x`} icon="warning" color={results.max_drawdown_pct>15?"red":"amber"}/>
+            </div>
+            <div className="grid grid-cols-4 gap-3">
+              {[{l:"Total PnL",v:`${results.total_pnl>=0?"+":""}$${results.total_pnl}`,c:results.total_pnl>=0?"text-green-400":"text-red-400"},
+                {l:"Avg Trade",v:`${results.avg_pnl>=0?"+":""}$${results.avg_pnl}`,c:results.avg_pnl>=0?"text-cyan-400":"text-red-400"},
+                {l:"Best Trade",v:`+$${results.best_trade}`,c:"text-green-400"},
+                {l:"Worst Trade",v:`$${results.worst_trade}`,c:"text-red-400"},
+              ].map(r=><S key={r.l} label={r.l} value={r.v} color={r.c}/>)}
+            </div>
+
+            {/* Equity curve */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <div>
+                  <h3 className="text-white font-semibold">Equity Curve</h3>
+                  <p className="text-slate-500 text-xs mt-0.5">{results.symbol} · {results.interval} · {results.start_date} → {results.end_date}</p>
+                </div>
+                <div className={`text-xl font-bold ${results.total_return_pct>=0?"text-green-400":"text-red-400"}`}>{results.total_return_pct>=0?"+":""}{results.total_return_pct}%</div>
+              </div>
+              <div className="h-52"><EquityChart data={results.equity_curve} initial={results.initial_balance}/></div>
+            </div>
+
+            {/* Trade log */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+              <div className="p-4 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2">
+                <h3 className="text-white font-semibold">Trade Log <span className="text-slate-500 font-normal text-sm">({results.trades.length})</span></h3>
+                <div className="flex gap-3 text-xs font-medium">
+                  <span className="text-green-400">✅ {results.winning_trades} wins</span>
+                  <span className="text-red-400">❌ {results.losing_trades} losses</span>
+                </div>
+              </div>
+              <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-900 z-10"><tr className="border-b border-slate-800">
+                    {["Entry","Exit","Entry $","Exit $","Qty","PnL","PnL %","Reason"].map(h=><th key={h} className="px-3 py-2.5 text-left text-slate-500 font-medium uppercase tracking-wider whitespace-nowrap">{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {results.trades.map((t,i)=>(
+                      <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                        <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{t.entry_date}</td>
+                        <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{t.exit_date}</td>
+                        <td className="px-3 py-2 text-white font-medium">${t.entry_price.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-white font-medium">${t.exit_price.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-slate-400">{t.quantity}</td>
+                        <td className="px-3 py-2 font-semibold"><span className={t.pnl>=0?"text-green-400":"text-red-400"}>{t.pnl>=0?"+":""}${t.pnl.toFixed(2)}</span></td>
+                        <td className="px-3 py-2"><span className={t.pnl_pct>=0?"text-green-400":"text-red-400"}>{t.pnl_pct>=0?"+":""}{t.pnl_pct.toFixed(2)}%</span></td>
+                        <td className="px-3 py-2">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${t.exit_reason==="take_profit"?"bg-green-500/15 text-green-400":t.exit_reason==="stop_loss"?"bg-red-500/15 text-red-400":"bg-slate-700 text-slate-400"}`}>
+                            {t.exit_reason.replace(/_/g," ")}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>)}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ── ANALYTICS ─────────────────────────────────────────────────────────────────
 const PnLChart = ({ data }) => {
   if (!data?.length) return <div className="flex items-center justify-center h-full text-slate-500 text-sm">No closed trades yet</div>;
@@ -1149,6 +1436,7 @@ export default function App() {
     {id:"bot",label:"Bot Control",icon:"bot"},
     {id:"history",label:"Trade History",icon:"chart"},
     {id:"analytics",label:"Analytics",icon:"analytics"},
+    {id:"backtest",label:"Backtesting",icon:"play"},
     {id:"alerts",label:"Alerts",icon:"alert",badge:unread},
     {id:"chat",label:"AI Advisor",icon:"chat"},
     {id:"settings",label:"Settings",icon:"settings"},
@@ -1160,6 +1448,7 @@ export default function App() {
     bot:<BotPage token={auth.token} mode={mode}/>,
     history:<TradesPage token={auth.token} mode={mode}/>,
     analytics:<AnalyticsPage token={auth.token} mode={mode}/>,
+    backtest:<BacktestPage token={auth.token}/>,
     alerts:<AlertsPage token={auth.token}/>,
     chat:<ChatPage token={auth.token} user={auth} mode={mode}/>,
     settings:<SettingsPage token={auth.token} user={auth} onProfileUpdate={p=>{ const updated={...auth,username:p.username,email:p.email}; setAuth(updated); localStorage.setItem("cb_auth",JSON.stringify(updated)); }}/>,
