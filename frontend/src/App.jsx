@@ -1434,7 +1434,7 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
               keyField:"gemini_api_key",keyPlaceholder:"AIzaSy…",keyMask:v=>v?.startsWith("••")},
             {id:"openrouter",label:"OpenRouter",badge:"FREE",color:"text-violet-400",bg:"bg-violet-500/15 border-violet-500/30",
               desc:"20+ free models · Pick any LLM",link:"openrouter.ai",
-              models:["meta-llama/llama-3.1-8b-instruct:free","meta-llama/llama-3.3-70b-instruct:free","google/gemma-2-9b-it:free","microsoft/phi-3-mini-128k-instruct:free","qwen/qwen-2.5-7b-instruct:free"],
+              models:["meta-llama/llama-3.3-70b-instruct:free","deepseek/deepseek-chat-v3-0324:free","qwen/qwen-2.5-72b-instruct:free","google/gemma-3-27b-it:free","mistralai/mistral-7b-instruct:free"],
               keyField:"openrouter_api_key",keyPlaceholder:"sk-or-…",keyMask:v=>v?.startsWith("••")},
             {id:"anthropic",label:"Anthropic",badge:"PAID",color:"text-amber-400",bg:"bg-amber-500/15 border-amber-500/30",
               desc:"Claude Haiku ~$0.001/msg · Best quality",link:"console.anthropic.com",

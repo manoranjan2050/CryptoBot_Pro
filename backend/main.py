@@ -1471,9 +1471,29 @@ def _call_provider(provider, key, model_override, system, messages):
         return _openai_compat("https://api.groq.com/openai/v1",key,model,system,messages)
     elif provider=="openrouter":
         if not key: raise HTTPException(400,"No OpenRouter API key — add it in Settings → AI Advisor (free at openrouter.ai)")
-        model=model_override or "meta-llama/llama-3.1-8b-instruct:free"
-        return _openai_compat("https://openrouter.ai/api/v1",key,model,system,messages,
-            extra_headers={"HTTP-Referer":"http://localhost:3000","X-Title":"CryptoBot Pro"})
+        hdrs={"HTTP-Referer":"http://localhost:3000","X-Title":"CryptoBot Pro"}
+        # OpenRouter rotates its free models — try a chain of free slugs until one works.
+        # A saved model is tried first, but if it was retired we still fall through the chain.
+        free_chain=[
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "deepseek/deepseek-chat-v3-0324:free",
+            "qwen/qwen-2.5-72b-instruct:free",
+            "google/gemma-3-27b-it:free",
+            "mistralai/mistral-7b-instruct:free",
+        ]
+        candidates=([model_override] if model_override else [])+[m for m in free_chain if m!=model_override]
+        last_err="OpenRouter error"
+        for m in candidates:
+            try:
+                return _openai_compat("https://openrouter.ai/api/v1",key,m,system,messages,extra_headers=hdrs)
+            except HTTPException as e:
+                last_err=str(e.detail)
+                low=last_err.lower()
+                # key/credit problems won't be fixed by another model — fail fast
+                if any(w in low for w in ("api key","auth","credit","quota exceeded")): raise
+                # model unavailable/retired → try next candidate
+                continue
+        raise HTTPException(400,f"All free OpenRouter models failed — last error: {last_err}. Pick a model manually in Settings → AI Advisor (check openrouter.ai/models?q=free for current free models)")
     elif provider=="gemini":
         if not key: raise HTTPException(400,"No Gemini API key — add it in Settings → AI Advisor (free at aistudio.google.com)")
         model=model_override or "gemini-1.5-flash"
