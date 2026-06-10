@@ -26,6 +26,9 @@ const paths = {
   bell:"M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z",
   mail:"M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z",
   refresh:"M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z",
+  bots:"M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 3c1.93 0 3.5 1.57 3.5 3.5S13.93 13 12 13s-3.5-1.57-3.5-3.5S10.07 6 12 6zm7 13H5v-.23c0-.62.28-1.2.76-1.58C7.47 15.82 9.64 15 12 15s4.53.82 6.24 2.19c.48.38.76.97.76 1.58V19z",
+  strategy:"M9 3L5 6.99h3V14h2V6.99h3L9 3zm7 14.01V10h-2v7.01h-3L15 21l4-3.99h-3z",
+  partial:"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z",
   user:"M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
   shield:"M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z",
   warning:"M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z",
@@ -372,8 +375,11 @@ const TradingPage = ({ token, mode }) => {
   const [loading,setLoading]=useState(false);
   const [closingId,setClosingId]=useState(null);
   const [editTrade,setEditTrade]=useState(null);
-  const [editForm,setEditForm]=useState({stop_loss_pct:"",take_profit_pct:""});
+  const [editForm,setEditForm]=useState({stop_loss_pct:"",take_profit_pct:"",tp2_pct:"",tp1_qty_pct:"50",breakeven_at_pct:""});
   const [editSaving,setEditSaving]=useState(false);
+  const [partialClosing,setPartialClosing]=useState(null);
+  const [scaleInTrade,setScaleInTrade]=useState(null);
+  const [scaleInAmount,setScaleInAmount]=useState("");
 
   const PAIRS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT"];
 
@@ -423,16 +429,32 @@ const TradingPage = ({ token, mode }) => {
 
   const openEdit = (t) => {
     setEditTrade(t);
-    setEditForm({stop_loss_pct: t.stop_loss_pct||1.5, take_profit_pct: t.take_profit_pct||3.0});
+    setEditForm({stop_loss_pct:t.stop_loss_pct||1.5, take_profit_pct:t.take_profit_pct||3.0, tp2_pct:t.tp2_pct||6.0, tp1_qty_pct:t.tp1_qty_pct||50, breakeven_at_pct:t.breakeven_at_pct||""});
   };
 
   const saveSlTp = async () => {
     if (!editTrade) return;
     setEditSaving(true);
-    const res = await api(`/api/demo/trade/${editTrade.id}/sltp`,{method:"PUT",body:JSON.stringify({stop_loss_pct:parseFloat(editForm.stop_loss_pct)||undefined,take_profit_pct:parseFloat(editForm.take_profit_pct)||undefined})},token);
-    if (res.trade_id) { setMsg({ok:true,text:`✅ ${editTrade.pair} — SL: ${res.stop_loss_pct}% ($${res.stop_price}) | TP: ${res.take_profit_pct}% ($${res.target_price})`}); setEditTrade(null); load(); }
-    else setMsg({ok:false,text:res.detail||"Update failed"});
+    const sltp = await api(`/api/demo/trade/${editTrade.id}/sltp`,{method:"PUT",body:JSON.stringify({stop_loss_pct:parseFloat(editForm.stop_loss_pct)||undefined,take_profit_pct:parseFloat(editForm.take_profit_pct)||undefined})},token);
+    const tpLevels = await api(`/api/demo/trade/${editTrade.id}/tp-levels`,{method:"PUT",body:JSON.stringify({tp2_pct:parseFloat(editForm.tp2_pct)||undefined,tp1_qty_pct:parseFloat(editForm.tp1_qty_pct)||undefined,breakeven_at_pct:parseFloat(editForm.breakeven_at_pct)||undefined})},token);
+    if (sltp.trade_id) { setMsg({ok:true,text:`✅ ${editTrade.pair} updated — SL:${sltp.stop_loss_pct}% TP1:${sltp.take_profit_pct}% TP2:${editForm.tp2_pct||"—"}%`}); setEditTrade(null); load(); }
+    else setMsg({ok:false,text:sltp.detail||"Update failed"});
     setEditSaving(false);
+  };
+
+  const partialClose = async (id, pct) => {
+    setPartialClosing(`${id}-${pct}`);
+    const res = await api(`/api/demo/trade/${id}/partial-close`,{method:"POST",body:JSON.stringify({close_pct:pct})},token);
+    if (res.pnl!==undefined) { setMsg({ok:res.pnl>=0,text:`${pct===100?"✅ Closed":"📤 Booked"} ${pct}% — PnL: ${res.pnl>=0?"+":""}$${res.pnl?.toFixed(2)} | Bal: $${res.new_balance?.toFixed(2)}`}); load(); }
+    else setMsg({ok:false,text:res.detail||"Failed"});
+    setPartialClosing(null);
+  };
+
+  const doScaleIn = async () => {
+    if (!scaleInTrade||!scaleInAmount) return;
+    const res = await api(`/api/demo/trade/${scaleInTrade.id}/scale-in`,{method:"POST",body:JSON.stringify({amount_usdt:parseFloat(scaleInAmount)})},token);
+    if (res.new_qty) { setMsg({ok:true,text:`📥 Scaled in! New qty: ${res.new_qty} | Avg entry: $${res.avg_entry}`}); setScaleInTrade(null); setScaleInAmount(""); load(); }
+    else setMsg({ok:false,text:res.detail||"Scale-in failed"});
   };
 
   const balance = mode==="demo"?funds.demo_balance:funds.live_balance;
@@ -627,22 +649,37 @@ const TradingPage = ({ token, mode }) => {
                   <div><div className="text-slate-500">Current Value</div><div className="text-cyan-400 font-semibold">${editTrade.current_value?.toLocaleString()}</div></div>
                 </div>
 
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Stop Loss %</label>
-                    <input type="number" step="0.1" min="0.1" max="49" value={editForm.stop_loss_pct} onChange={e=>setEditForm(f=>({...f,stop_loss_pct:e.target.value}))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-red-500 transition-colors"/>
-                    {editTrade.entry_price&&editForm.stop_loss_pct&&(
-                      <p className="text-red-400 text-xs mt-1">Stop at <span className="font-semibold">${(editTrade.entry_price*(1-parseFloat(editForm.stop_loss_pct)/100)).toFixed(2)}</span></p>
-                    )}
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Stop Loss %</label>
+                      <input type="number" step="0.1" min="0.1" max="49" value={editForm.stop_loss_pct} onChange={e=>setEditForm(f=>({...f,stop_loss_pct:e.target.value}))}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-red-500 transition-colors"/>
+                      {editTrade.entry_price&&editForm.stop_loss_pct&&<p className="text-red-400 text-xs mt-0.5">${(editTrade.entry_price*(1-parseFloat(editForm.stop_loss_pct)/100)).toFixed(2)}</p>}
+                    </div>
+                    <div>
+                      <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">TP1 % (partial)</label>
+                      <input type="number" step="0.1" min="0.1" max="199" value={editForm.take_profit_pct} onChange={e=>setEditForm(f=>({...f,take_profit_pct:e.target.value}))}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-green-500 transition-colors"/>
+                      {editTrade.entry_price&&editForm.take_profit_pct&&<p className="text-green-400 text-xs mt-0.5">${(editTrade.entry_price*(1+parseFloat(editForm.take_profit_pct)/100)).toFixed(2)}</p>}
+                    </div>
+                    <div>
+                      <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">TP2 % (full close)</label>
+                      <input type="number" step="0.1" min="0.1" max="500" value={editForm.tp2_pct} onChange={e=>setEditForm(f=>({...f,tp2_pct:e.target.value}))}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-cyan-500 transition-colors"/>
+                      {editTrade.entry_price&&editForm.tp2_pct&&<p className="text-cyan-400 text-xs mt-0.5">${(editTrade.entry_price*(1+parseFloat(editForm.tp2_pct)/100)).toFixed(2)}</p>}
+                    </div>
+                    <div>
+                      <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">TP1 close qty %</label>
+                      <input type="number" step="1" min="10" max="100" value={editForm.tp1_qty_pct} onChange={e=>setEditForm(f=>({...f,tp1_qty_pct:e.target.value}))}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 transition-colors"/>
+                      <p className="text-slate-500 text-xs mt-0.5">% of pos to close at TP1</p>
+                    </div>
                   </div>
                   <div>
-                    <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Take Profit %</label>
-                    <input type="number" step="0.1" min="0.1" max="199" value={editForm.take_profit_pct} onChange={e=>setEditForm(f=>({...f,take_profit_pct:e.target.value}))}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-green-500 transition-colors"/>
-                    {editTrade.entry_price&&editForm.take_profit_pct&&(
-                      <p className="text-green-400 text-xs mt-1">Target at <span className="font-semibold">${(editTrade.entry_price*(1+parseFloat(editForm.take_profit_pct)/100)).toFixed(2)}</span></p>
-                    )}
+                    <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Break-even trigger %</label>
+                    <input type="number" step="0.1" min="0.1" placeholder="e.g. 1.5 → move SL to entry when +1.5%" value={editForm.breakeven_at_pct} onChange={e=>setEditForm(f=>({...f,breakeven_at_pct:e.target.value}))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-violet-500 transition-colors placeholder-slate-600"/>
                   </div>
                 </div>
 
@@ -651,6 +688,35 @@ const TradingPage = ({ token, mode }) => {
                   <button onClick={saveSlTp} disabled={editSaving} className="flex-1 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white py-2.5 rounded-xl font-bold text-sm transition-all disabled:opacity-50">
                     {editSaving?"Saving…":"Update"}
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Scale-In Modal */}
+          {scaleInTrade && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+              <div className="bg-slate-900 border border-violet-500/30 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-white font-bold text-lg">Scale In Position</h3>
+                    <p className="text-slate-400 text-sm mt-0.5">{scaleInTrade.pair} · Current qty: {scaleInTrade.quantity?.toFixed(6)}</p>
+                  </div>
+                  <button onClick={()=>setScaleInTrade(null)} className="text-slate-500 hover:text-white w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-800 text-lg">✕</button>
+                </div>
+                <div className="bg-slate-800 rounded-xl p-3 mb-4 grid grid-cols-2 gap-2 text-xs text-center">
+                  <div><div className="text-slate-500">Avg Entry</div><div className="text-white font-bold">${(scaleInTrade.avg_entry_price||scaleInTrade.entry_price)?.toFixed(2)}</div></div>
+                  <div><div className="text-slate-500">Unrealized PnL</div><div className={`font-bold ${(scaleInTrade.unrealized_pnl||0)>=0?"text-green-400":"text-red-400"}`}>${(scaleInTrade.unrealized_pnl||0).toFixed(2)}</div></div>
+                </div>
+                <div className="mb-4">
+                  <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Add Amount (USDT)</label>
+                  <input type="number" placeholder="e.g. 50" value={scaleInAmount} onChange={e=>setScaleInAmount(e.target.value)}
+                    className="w-full bg-slate-800 border border-violet-500/40 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-violet-500 transition-colors placeholder-slate-600"/>
+                  <p className="text-slate-500 text-xs mt-1">Adds qty at current price, recalculates average entry</p>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={()=>setScaleInTrade(null)} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white py-2.5 rounded-xl font-medium text-sm">Cancel</button>
+                  <button onClick={doScaleIn} disabled={!scaleInAmount} className="flex-1 bg-violet-500 hover:bg-violet-400 text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-40">Scale In</button>
                 </div>
               </div>
             </div>
@@ -688,6 +754,7 @@ const TradingPage = ({ token, mode }) => {
                         </div>
                         <div className="flex items-center gap-1.5">
                           {!isPending && <button onClick={()=>openEdit(t)} className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-cyan-500/10 text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-500/30 rounded-lg transition-all font-medium">Edit</button>}
+                          {!isPending && <button onClick={()=>{setScaleInTrade(t);setScaleInAmount("");}} className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-violet-500/10 text-slate-400 hover:text-violet-400 border border-slate-700 hover:border-violet-500/30 rounded-lg transition-all font-medium">+Add</button>}
                           <button onClick={()=>closeTrade(t.id)} disabled={closingId===t.id}
                             className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-red-500/10 text-slate-400 hover:text-red-400 border border-slate-700 hover:border-red-500/30 rounded-lg transition-all font-medium disabled:opacity-50">
                             {closingId===t.id?"…":isPending?"Cancel":"Close"}
@@ -720,11 +787,22 @@ const TradingPage = ({ token, mode }) => {
                         </div>
                         {/* Position details grid */}
                         <div className="grid grid-cols-4 gap-2 text-xs bg-slate-800/60 rounded-lg p-2.5">
-                          <div className="text-center"><div className="text-slate-500 mb-0.5">Entry</div><div className="text-white font-medium">${t.entry_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div></div>
+                          <div className="text-center"><div className="text-slate-500 mb-0.5">Entry</div><div className="text-white font-medium">${(t.avg_entry_price||t.entry_price)?.toLocaleString(undefined,{maximumFractionDigits:2})}{t.scale_count>0&&<span className="text-violet-400 ml-1">×{(t.scale_count||0)+1}</span>}</div></div>
                           <div className="text-center"><div className="text-slate-500 mb-0.5">Margin</div><div className="text-amber-400 font-semibold">${t.margin_value?.toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
                           <div className="text-center"><div className="text-slate-500 mb-0.5">Stop</div><div className="text-red-400 font-semibold">${t.stop_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div><div className="text-slate-600">{t.stop_loss_pct}%</div></div>
-                          <div className="text-center"><div className="text-slate-500 mb-0.5">Target</div><div className="text-green-400 font-semibold">${t.target_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div><div className="text-slate-600">{t.take_profit_pct}%</div></div>
+                          <div className="text-center"><div className="text-slate-500 mb-0.5">TP1{t.tp2_pct?"/TP2":""}</div><div className="text-green-400 font-semibold">${t.target_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div><div className="text-slate-600">{t.take_profit_pct}%{t.tp2_pct?`/${t.tp2_pct}%`:""}</div></div>
                         </div>
+                        {/* Partial close row */}
+                        <div className="flex gap-1.5 mt-2">
+                          {[25,50,75,100].map(pct=>(
+                            <button key={pct} onClick={()=>partialClose(t.id,pct)} disabled={partialClosing===`${t.id}-${pct}`}
+                              className={`flex-1 text-xs py-1.5 rounded-lg font-bold transition-all disabled:opacity-40 ${pct===100?"bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/25":"bg-slate-800 hover:bg-green-500/10 text-slate-400 hover:text-green-400 border border-slate-700 hover:border-green-500/30"}`}>
+                              {partialClosing===`${t.id}-${pct}`?"…":`${pct===100?"Close All":`Book ${pct}%`}`}
+                            </button>
+                          ))}
+                        </div>
+                        {t.tp1_hit&&<div className="mt-1.5 text-xs text-cyan-400 bg-cyan-500/10 rounded-lg px-2 py-1 text-center">✅ TP1 booked — holding remainder for TP2{t.tp2_pct?` (${t.tp2_pct}%)`:""}</div>}
+                        {t.breakeven_activated&&<div className="mt-1 text-xs text-violet-400 bg-violet-500/10 rounded-lg px-2 py-1 text-center">🔒 Break-even active — SL moved to entry</div>}
                       </>)}
                     </div>
                   );
@@ -800,6 +878,206 @@ const BotPage = ({ token, mode }) => {
       <button onClick={save} disabled={loading} className="flex items-center gap-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white font-semibold px-6 py-2.5 rounded-xl text-sm transition-all disabled:opacity-50">
         {saved?<><Icon name="check" size={14}/>Saved!</>:loading?"Saving…":"Save Configuration"}
       </button>
+    </div>
+  );
+};
+
+// ── BOT MANAGER PAGE ─────────────────────────────────────────────────────────
+const STRATEGIES = [
+  {id:"EMA",name:"EMA Crossover",risk:"Low",desc:"EMA fast/slow crossover + RSI filter. Reliable trend-following, fewer signals."},
+  {id:"MACD",name:"MACD + RSI",risk:"Medium",desc:"MACD signal-line cross confirmed by RSI. Good for trending markets."},
+  {id:"BB",name:"Bollinger Bands",risk:"Medium",desc:"Buy at lower band (oversold), sell at upper band. Works in ranging markets."},
+  {id:"RSI_REV",name:"RSI Reversal",risk:"Low",desc:"Pure RSI: buy on oversold (<30), sell on overbought (>70). Simple & effective."},
+  {id:"GOLDEN",name:"Golden/Death Cross",risk:"Low",desc:"SMA 50/200 crossover. Very reliable long-term signal, slow but accurate."},
+  {id:"SUPER",name:"Supertrend",risk:"Medium",desc:"ATR-based trend indicator. Strong for breakout detection on any timeframe."},
+];
+const RISK_COLOR = {Low:"text-green-400 bg-green-500/10 border-green-500/20",Medium:"text-amber-400 bg-amber-500/10 border-amber-500/20",High:"text-red-400 bg-red-500/10 border-red-500/20"};
+
+const BotManagerPage = ({ token, mode }) => {
+  const [bots,setBots]=useState([]);
+  const [showCreate,setShowCreate]=useState(false);
+  const [editBot,setEditBot]=useState(null);
+  const [form,setForm]=useState({name:"",pair:"BTCUSDT",timeframe:"1h",strategy:"EMA",params:"{}",capital_usdt:100,sl_pct:1.5,tp1_pct:3.0,tp2_pct:6.0,trailing_enabled:true});
+  const [saving,setSaving]=useState(false);
+  const [togglingId,setTogglingId]=useState(null);
+  const [signalMap,setSignalMap]=useState({});
+
+  const load=()=>api("/api/bots",{},token).then(b=>setBots(Array.isArray(b)?b:[]));
+  useEffect(()=>{load();const t=setInterval(load,30000);return()=>clearInterval(t);},[token]);
+
+  const openCreate=()=>{ setForm({name:"",pair:"BTCUSDT",timeframe:"1h",strategy:"EMA",params:"{}",capital_usdt:100,sl_pct:1.5,tp1_pct:3.0,tp2_pct:6.0,trailing_enabled:true}); setEditBot(null); setShowCreate(true); };
+  const openEdit=b=>{ setForm({name:b.name,pair:b.pair,timeframe:b.timeframe,strategy:b.strategy,params:b.params||"{}",capital_usdt:b.capital_usdt,sl_pct:b.sl_pct,tp1_pct:b.tp1_pct,tp2_pct:b.tp2_pct,trailing_enabled:!!b.trailing_enabled}); setEditBot(b); setShowCreate(true); };
+
+  const saveBot=async()=>{
+    setSaving(true);
+    if(editBot) await api(`/api/bots/${editBot.id}`,{method:"PUT",body:JSON.stringify(form)},token);
+    else await api("/api/bots",{method:"POST",body:JSON.stringify(form)},token);
+    setSaving(false); setShowCreate(false); load();
+  };
+
+  const toggleBot=async(b)=>{
+    setTogglingId(b.id);
+    await api(`/api/bots/${b.id}/${b.is_running?"stop":"start"}`,{method:"POST"},token);
+    setTogglingId(null); load();
+  };
+
+  const deleteBot=async(b)=>{
+    if(!window.confirm(`Delete bot "${b.name}"?`)) return;
+    await api(`/api/bots/${b.id}`,{method:"DELETE"},token); load();
+  };
+
+  const fetchSignal=async(b)=>{
+    const r=await api(`/api/bots/${b.id}/signal`,{},token);
+    setSignalMap(m=>({...m,[b.id]:r}));
+  };
+
+  const StratPill=({id})=>{
+    const s=STRATEGIES.find(x=>x.id===id)||{name:id,risk:"Medium"};
+    return <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${RISK_COLOR[s.risk]||RISK_COLOR.Medium}`}>{s.name}</span>;
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-white text-2xl font-bold">Bot Manager</h1><p className="text-slate-500 text-sm mt-0.5">Multiple automated trading bots · each with its own strategy & capital</p></div>
+        <button onClick={openCreate} className="flex items-center gap-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white font-semibold px-5 py-2.5 rounded-xl text-sm">
+          + Create Bot
+        </button>
+      </div>
+
+      {/* Strategy Guide */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <h3 className="text-white font-semibold mb-3">Strategy Library</h3>
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
+          {STRATEGIES.map(s=>(
+            <div key={s.id} className="bg-slate-800 rounded-xl p-3 border border-slate-700">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-white text-sm font-semibold">{s.name}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full border ${RISK_COLOR[s.risk]}`}>{s.risk} Risk</span>
+              </div>
+              <p className="text-slate-400 text-xs leading-relaxed">{s.desc}</p>
+              <div className="mt-2 text-xs text-slate-600 font-mono">{s.id}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Bot cards */}
+      {bots.length===0?(
+        <div className="text-center py-16 bg-slate-900 border border-slate-800 rounded-xl">
+          <div className="text-4xl mb-3">🤖</div>
+          <p className="text-white font-semibold">No bots yet</p>
+          <p className="text-slate-500 text-sm mt-1">Create your first automated bot with any of the 6 strategies</p>
+          <button onClick={openCreate} className="mt-4 bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 px-5 py-2 rounded-xl text-sm font-semibold hover:bg-cyan-500/30 transition-colors">+ Create First Bot</button>
+        </div>
+      ):(
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {bots.map(b=>{
+            const sig=signalMap[b.id];
+            const winRate=b.trade_count>0?Math.round((b.win_count/b.trade_count)*100):0;
+            return (
+              <div key={b.id} className={`bg-slate-900 border rounded-xl p-5 transition-all ${b.is_running?"border-green-500/30 shadow-sm shadow-green-500/10":"border-slate-800"}`}>
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-white font-bold">{b.name}</h3>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${b.is_running?"bg-green-500/20 text-green-400 border border-green-500/30":"bg-slate-700 text-slate-400"}`}>{b.is_running?"● RUNNING":"○ Stopped"}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                      <StratPill id={b.strategy}/>
+                      <span className="text-slate-500 text-xs">{b.pair} · {b.timeframe}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button onClick={()=>fetchSignal(b)} title="Get signal" className="text-xs p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-cyan-400 border border-slate-700 rounded-lg transition-colors">⚡</button>
+                    <button onClick={()=>openEdit(b)} className="text-xs px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700 rounded-lg transition-colors">Edit</button>
+                    <button onClick={()=>deleteBot(b)} className="text-xs px-2.5 py-1.5 bg-slate-800 hover:bg-red-500/10 text-slate-500 hover:text-red-400 border border-slate-700 hover:border-red-500/30 rounded-lg transition-colors">Del</button>
+                  </div>
+                </div>
+
+                {/* Stats row */}
+                <div className="grid grid-cols-4 gap-2 text-xs text-center bg-slate-800/50 rounded-lg p-2.5 mb-3">
+                  <div><div className="text-slate-500">Capital</div><div className="text-amber-400 font-semibold">${b.capital_usdt}</div></div>
+                  <div><div className="text-slate-500">PnL</div><div className={`font-bold ${(b.total_pnl||0)>=0?"text-green-400":"text-red-400"}`}>{(b.total_pnl||0)>=0?"+":""}${(b.total_pnl||0).toFixed(2)}</div></div>
+                  <div><div className="text-slate-500">Trades</div><div className="text-white font-semibold">{b.trade_count||0}</div></div>
+                  <div><div className="text-slate-500">Win%</div><div className={`font-bold ${winRate>=50?"text-green-400":"text-slate-400"}`}>{winRate}%</div></div>
+                </div>
+
+                {/* SL/TP row */}
+                <div className="flex items-center gap-3 text-xs text-slate-500 mb-3">
+                  <span className="text-red-400">SL {b.sl_pct}%</span>
+                  <span className="text-slate-700">·</span>
+                  <span className="text-green-400">TP1 {b.tp1_pct}%</span>
+                  <span className="text-slate-700">·</span>
+                  <span className="text-cyan-400">TP2 {b.tp2_pct}%</span>
+                  {b.trailing_enabled&&<><span className="text-slate-700">·</span><span className="text-violet-400">Trailing ✓</span></>}
+                </div>
+
+                {/* Signal badge */}
+                {sig && (
+                  <div className={`mb-3 text-xs px-3 py-1.5 rounded-lg text-center font-semibold border ${sig.signal==="BUY"?"bg-green-500/10 border-green-500/20 text-green-400":sig.signal==="SELL"?"bg-red-500/10 border-red-500/20 text-red-400":"bg-slate-800 border-slate-700 text-slate-400"}`}>
+                    {sig.signal} · RSI {sig.rsi?.toFixed(1)} {sig.info&&Object.keys(sig.info).length>0&&("· "+Object.entries(sig.info).slice(0,2).map(([k,v])=>k+":"+v).join(" "))}
+                  </div>
+                )}
+
+                {b.last_signal&&<div className="text-slate-600 text-xs mb-3">Last: {b.last_signal} · {b.last_run_at?new Date(b.last_run_at).toLocaleString():"never"}</div>}
+
+                <button onClick={()=>toggleBot(b)} disabled={togglingId===b.id}
+                  className={`w-full py-2.5 rounded-xl font-bold text-sm transition-all disabled:opacity-40 ${b.is_running?"bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/25":"bg-green-500/15 hover:bg-green-500/25 text-green-400 border border-green-500/25"}`}>
+                  {togglingId===b.id?"…":b.is_running?"⏹ Stop Bot":"▶ Start Bot"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Create/Edit Bot Modal */}
+      {showCreate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full shadow-2xl my-4">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-white font-bold text-lg">{editBot?"Edit Bot":"Create New Bot"}</h3>
+              <button onClick={()=>setShowCreate(false)} className="text-slate-500 hover:text-white w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-800 text-lg">✕</button>
+            </div>
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <Input label="Bot Name" value={form.name} onChange={v=>setForm(f=>({...f,name:v}))} placeholder="e.g. BTC Scalper"/>
+              <div className="grid grid-cols-2 gap-3">
+                <Select label="Trading Pair" value={form.pair} onChange={v=>setForm(f=>({...f,pair:v}))} options={["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT"].map(p=>({value:p,label:p.replace("USDT","/USDT")}))}/>
+                <Select label="Timeframe" value={form.timeframe} onChange={v=>setForm(f=>({...f,timeframe:v}))} options={[{value:"15m",label:"15m"},{value:"1h",label:"1h"},{value:"4h",label:"4h"},{value:"1d",label:"1d"}]}/>
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-2 block">Strategy</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {STRATEGIES.map(s=>(
+                    <button key={s.id} onClick={()=>setForm(f=>({...f,strategy:s.id}))}
+                      className={`text-left px-3 py-2.5 rounded-lg border text-xs transition-all ${form.strategy===s.id?"border-cyan-500/50 bg-cyan-500/10":"border-slate-700 bg-slate-800 hover:border-slate-600"}`}>
+                      <div className={`font-bold mb-0.5 ${form.strategy===s.id?"text-cyan-400":"text-white"}`}>{s.name}</div>
+                      <div className={`text-xs ${RISK_COLOR[s.risk].split(" ")[0]}`}>{s.risk} Risk</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="Capital (USDT)" type="number" value={form.capital_usdt} onChange={v=>setForm(f=>({...f,capital_usdt:v}))}/>
+                <Input label="Stop Loss %" type="number" value={form.sl_pct} onChange={v=>setForm(f=>({...f,sl_pct:v}))}/>
+                <Input label="TP1 %" type="number" value={form.tp1_pct} onChange={v=>setForm(f=>({...f,tp1_pct:v}))} hint="Partial close target"/>
+                <Input label="TP2 %" type="number" value={form.tp2_pct} onChange={v=>setForm(f=>({...f,tp2_pct:v}))} hint="Full close target"/>
+              </div>
+              <div className="flex items-center justify-between p-3 bg-slate-800 rounded-xl">
+                <div><div className="text-white text-sm font-medium">Trailing Stop</div><div className="text-slate-400 text-xs">Move SL with price momentum</div></div>
+                <Toggle value={form.trailing_enabled} onChange={v=>setForm(f=>({...f,trailing_enabled:v}))}/>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={()=>setShowCreate(false)} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white py-2.5 rounded-xl font-medium text-sm">Cancel</button>
+              <button onClick={saveBot} disabled={saving||!form.name} className="flex-1 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-40">
+                {saving?"Saving…":editBot?"Update Bot":"Create Bot"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1698,6 +1976,7 @@ export default function App() {
     {id:"dashboard",label:"Dashboard",icon:"dashboard"},
     {id:"trading",label:mode==="demo"?"Paper Trading":"Live Trading",icon:"trade"},
     {id:"bot",label:"Bot Control",icon:"bot"},
+    {id:"botmanager",label:"Bot Manager",icon:"bots"},
     {id:"history",label:"Trade History",icon:"chart"},
     {id:"analytics",label:"Analytics",icon:"analytics"},
     {id:"backtest",label:"Backtesting",icon:"play"},
@@ -1710,6 +1989,7 @@ export default function App() {
     dashboard:<DashboardPage token={auth.token} mode={mode}/>,
     trading:<TradingPage token={auth.token} mode={mode}/>,
     bot:<BotPage token={auth.token} mode={mode}/>,
+    botmanager:<BotManagerPage token={auth.token} mode={mode}/>,
     history:<TradesPage token={auth.token} mode={mode}/>,
     analytics:<AnalyticsPage token={auth.token} mode={mode}/>,
     backtest:<BacktestPage token={auth.token}/>,

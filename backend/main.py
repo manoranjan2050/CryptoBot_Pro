@@ -4,7 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
-import jwt, bcrypt, sqlite3, requests, smtplib, threading, time, io, csv, os, hmac, hashlib, json, sys
+import jwt, bcrypt, sqlite3, requests, smtplib, threading, time, io, csv, os, hmac, hashlib, json, sys, math
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -125,6 +125,28 @@ def init_db():
         content TEXT NOT NULL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS bots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        pair TEXT DEFAULT 'BTCUSDT',
+        timeframe TEXT DEFAULT '1h',
+        strategy TEXT DEFAULT 'EMA',
+        params TEXT DEFAULT '{}',
+        capital_usdt REAL DEFAULT 100,
+        sl_pct REAL DEFAULT 1.5,
+        tp1_pct REAL DEFAULT 3.0,
+        tp2_pct REAL DEFAULT 6.0,
+        trailing_enabled INTEGER DEFAULT 1,
+        is_running INTEGER DEFAULT 0,
+        total_pnl REAL DEFAULT 0,
+        trade_count INTEGER DEFAULT 0,
+        win_count INTEGER DEFAULT 0,
+        active_hours TEXT DEFAULT 'all',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        last_signal TEXT,
+        last_run_at TEXT
+    );
     """)
     # Migrate existing DBs
     for stmt in [
@@ -143,6 +165,17 @@ def init_db():
         "ALTER TABLE settings ADD COLUMN gemini_api_key TEXT",
         "ALTER TABLE settings ADD COLUMN openrouter_api_key TEXT",
         "ALTER TABLE settings ADD COLUMN ai_model TEXT",
+        "ALTER TABLE trades ADD COLUMN notes TEXT",
+        "ALTER TABLE trades ADD COLUMN tag TEXT DEFAULT 'Manual'",
+        "ALTER TABLE trades ADD COLUMN bot_id INTEGER",
+        "ALTER TABLE trades ADD COLUMN avg_entry_price REAL",
+        "ALTER TABLE trades ADD COLUMN scale_count INTEGER DEFAULT 0",
+        "ALTER TABLE trades ADD COLUMN tp2_pct REAL",
+        "ALTER TABLE trades ADD COLUMN tp1_hit INTEGER DEFAULT 0",
+        "ALTER TABLE trades ADD COLUMN tp2_hit INTEGER DEFAULT 0",
+        "ALTER TABLE trades ADD COLUMN tp1_qty_pct REAL DEFAULT 50",
+        "ALTER TABLE trades ADD COLUMN breakeven_at_pct REAL",
+        "ALTER TABLE trades ADD COLUMN breakeven_activated INTEGER DEFAULT 0",
     ]:
         try: c.execute(stmt)
         except: pass
@@ -218,6 +251,105 @@ def calc_rsi(prices, period=14):
     avg_g = sum(gains)/period; avg_l = sum(losses)/period
     if avg_l == 0: return 100
     return round(100-(100/(1+(avg_g/avg_l))),2)
+
+def calc_sma(prices, period):
+    if len(prices) < period: return []
+    return [sum(prices[i:i+period])/period for i in range(len(prices)-period+1)]
+
+def calc_macd(prices, fast=12, slow=26, signal=9):
+    if len(prices) < slow+signal: return None, None, None
+    ef = calc_ema(prices, fast); es = calc_ema(prices, slow)
+    diff = len(ef)-len(es)
+    macd_line = [f-s for f,s in zip(ef[diff:], es)]
+    if len(macd_line)<signal: return (macd_line[-1] if macd_line else 0), 0, 0
+    sig_line = calc_ema(macd_line, signal)
+    offset = len(macd_line)-len(sig_line)
+    hist = [m-s for m,s in zip(macd_line[offset:], sig_line)]
+    return macd_line[-1], sig_line[-1], (hist[-1] if hist else 0)
+
+def calc_bollinger(prices, period=20, stddev=2.0):
+    if len(prices)<period: return None, None, None
+    sma = calc_sma(prices, period); mid = sma[-1]; window = prices[-period:]
+    std = math.sqrt(sum((p-mid)**2 for p in window)/period)
+    return mid+stddev*std, mid, mid-stddev*std
+
+def calc_atr(highs, lows, closes, period=14):
+    if len(closes)<period+1: return 0
+    trs=[max(highs[i]-lows[i],abs(highs[i]-closes[i-1]),abs(lows[i]-closes[i-1])) for i in range(1,len(closes))]
+    return sum(trs[-period:])/period
+
+def calc_supertrend(highs, lows, closes, period=10, mult=3.0):
+    if len(closes)<period+1: return None, None
+    atr=calc_atr(highs,lows,closes,period); mid=(highs[-1]+lows[-1])/2
+    upper=mid+mult*atr; lower=mid-mult*atr
+    trend=1 if closes[-1]>lower else (-1 if closes[-1]<upper else 0)
+    return trend, (lower if trend==1 else upper)
+
+def get_signal(strategy, pair, interval="1h", params_json="{}"):
+    """Returns ('BUY'|'SELL'|'HOLD', rsi, info_dict) for the given strategy."""
+    try:
+        params=json.loads(params_json) if params_json else {}
+        r=requests.get(f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={interval}&limit=200",timeout=8).json()
+        if not isinstance(r,list) or len(r)<30: return "HOLD",50,{}
+        closes=[float(k[4]) for k in r]; highs=[float(k[2]) for k in r]; lows=[float(k[3]) for k in r]
+        rsi=calc_rsi(closes,14); s=strategy.upper()
+
+        if s=="EMA":
+            fast=params.get("ema_fast",21); slow=params.get("ema_slow",55)
+            ef=calc_ema(closes,fast); es=calc_ema(closes,slow)
+            if len(ef)<2 or len(es)<2: return "HOLD",rsi,{}
+            if ef[-1]>es[-1] and ef[-2]<=es[-2] and 45<=rsi<=65:
+                return "BUY",rsi,{"ema_fast":round(ef[-1],2),"ema_slow":round(es[-1],2)}
+            if ef[-1]<es[-1] and ef[-2]>=es[-2]:
+                return "SELL",rsi,{"ema_fast":round(ef[-1],2),"ema_slow":round(es[-1],2)}
+            return "HOLD",rsi,{"ema_fast":round(ef[-1],2),"ema_slow":round(es[-1],2)}
+
+        elif s=="MACD":
+            macd,sig,hist=calc_macd(closes)
+            if macd is None: return "HOLD",rsi,{}
+            prev_macd,prev_sig,_=calc_macd(closes[:-1])
+            if prev_macd is None: return "HOLD",rsi,{}
+            if macd>sig and prev_macd<=prev_sig and rsi<70:
+                return "BUY",rsi,{"macd":round(macd,4),"signal":round(sig,4),"hist":round(hist,4)}
+            if macd<sig and prev_macd>=prev_sig and rsi>30:
+                return "SELL",rsi,{"macd":round(macd,4),"signal":round(sig,4),"hist":round(hist,4)}
+            return "HOLD",rsi,{"macd":round(macd,4),"signal":round(sig,4)}
+
+        elif s=="BB":
+            period=params.get("bb_period",20); std=params.get("bb_std",2.0)
+            upper,mid,lower=calc_bollinger(closes,period,std)
+            if upper is None: return "HOLD",rsi,{}
+            price=closes[-1]
+            if price<=lower and rsi<35: return "BUY",rsi,{"upper":round(upper,2),"mid":round(mid,2),"lower":round(lower,2)}
+            if price>=upper and rsi>65: return "SELL",rsi,{"upper":round(upper,2),"mid":round(mid,2),"lower":round(lower,2)}
+            return "HOLD",rsi,{"upper":round(upper,2),"mid":round(mid,2),"lower":round(lower,2)}
+
+        elif s=="RSI_REV":
+            oversold=params.get("oversold",30); overbought=params.get("overbought",70)
+            if rsi<=oversold: return "BUY",rsi,{"oversold":oversold,"overbought":overbought}
+            if rsi>=overbought: return "SELL",rsi,{"oversold":oversold,"overbought":overbought}
+            return "HOLD",rsi,{"oversold":oversold,"overbought":overbought}
+
+        elif s=="GOLDEN":
+            sma50=calc_sma(closes,50); sma_slow=calc_sma(closes,200) if len(closes)>=200 else calc_sma(closes,100)
+            if len(sma50)<2 or len(sma_slow)<2: return "HOLD",rsi,{}
+            if sma50[-1]>sma_slow[-1] and sma50[-2]<=sma_slow[-2]:
+                return "BUY",rsi,{"sma_fast":round(sma50[-1],2),"sma_slow":round(sma_slow[-1],2)}
+            if sma50[-1]<sma_slow[-1] and sma50[-2]>=sma_slow[-2]:
+                return "SELL",rsi,{"sma_fast":round(sma50[-1],2),"sma_slow":round(sma_slow[-1],2)}
+            return "HOLD",rsi,{"sma_fast":round(sma50[-1],2),"sma_slow":round(sma_slow[-1],2)}
+
+        elif s=="SUPER":
+            period=params.get("st_period",10); mult=params.get("st_mult",3.0)
+            trend,level=calc_supertrend(highs,lows,closes,period,mult)
+            if trend is None: return "HOLD",rsi,{}
+            if trend==1 and rsi<70: return "BUY",rsi,{"trend":"UP","level":round(level,2)}
+            if trend==-1 and rsi>30: return "SELL",rsi,{"trend":"DOWN","level":round(level,2)}
+            return "HOLD",rsi,{"level":round(level,2) if level else 0}
+
+        return "HOLD",rsi,{}
+    except Exception as e:
+        print(f"get_signal error ({strategy}/{pair}): {e}"); return "HOLD",50,{}
 
 def send_telegram(token, chat_id, text):
     try:
@@ -351,10 +483,95 @@ def run_auto_bot():
         try: c.close()
         except: pass
 
+def run_multi_bots():
+    """Run all user-created named bots (bots table)."""
+    c=get_db()
+    try:
+        bots=c.execute("SELECT * FROM bots WHERE is_running=1").fetchall()
+        for bot in bots:
+            uid=bot["user_id"]
+            funds=c.execute("SELECT * FROM funds WHERE user_id=?",(uid,)).fetchone()
+            if not funds: continue
+            # Manage existing open bot trades (SL/TP/trailing/partial-TP)
+            open_trades=c.execute("SELECT * FROM trades WHERE user_id=? AND mode='demo' AND status='open' AND bot_id=?",(uid,bot["id"])).fetchall()
+            for t in open_trades:
+                curr_p=live_price(t["pair"])
+                if curr_p==0: continue
+                entry=t["avg_entry_price"] or t["entry_price"] or curr_p
+                sl=t["trailing_stop_pct"] or bot["sl_pct"] or 1.5
+                tp1=t["take_profit_pct"] or bot["tp1_pct"] or 3.0
+                tp2=t["tp2_pct"] or bot["tp2_pct"] or 6.0
+                # Breakeven activation
+                if t["breakeven_at_pct"] and not t["breakeven_activated"] and t["side"]=="BUY":
+                    if curr_p>=entry*(1+t["breakeven_at_pct"]/100):
+                        c.execute("UPDATE trades SET trailing_stop_pct=0.1,breakeven_activated=1 WHERE id=?",(t["id"],))
+                        add_alert(uid,"info",f"🔒 Break-even on {t['pair']} @ ${curr_p:,.2f}","demo")
+                # TP1 partial close
+                if not t["tp1_hit"] and t["side"]=="BUY" and curr_p>=entry*(1+tp1/100):
+                    tp1_qty_pct=t["tp1_qty_pct"] or 50
+                    close_qty=round(t["quantity"]*(tp1_qty_pct/100),6)
+                    remaining=round(t["quantity"]-close_qty,6)
+                    pnl=(curr_p-entry)*close_qty; returned=entry*close_qty+pnl
+                    f2=c.execute("SELECT * FROM funds WHERE user_id=?",(uid,)).fetchone()
+                    c.execute("UPDATE funds SET demo_balance=? WHERE user_id=?",((f2["demo_balance"] or 0)+returned,uid))
+                    c.execute("UPDATE trades SET quantity=?,tp1_hit=1 WHERE id=?",(remaining,t["id"]))
+                    c.execute("UPDATE bots SET total_pnl=total_pnl+? WHERE id=?",(pnl,bot["id"]))
+                    add_alert(uid,"success",f"📤 TP1! Closed {tp1_qty_pct:.0f}% {t['pair']} @ ${curr_p:,.2f} PnL:${pnl:+.2f}","demo")
+                    c.commit(); continue
+                # TP2 full close
+                if t["tp1_hit"] and not t["tp2_hit"] and t["side"]=="BUY" and curr_p>=entry*(1+tp2/100):
+                    close_trade_auto(c,t,curr_p,uid,"demo")
+                    pnl=(curr_p-entry)*t["quantity"]
+                    c.execute("UPDATE bots SET total_pnl=total_pnl+?,trade_count=trade_count+1,win_count=win_count+1,last_signal='TP2 HIT' WHERE id=?",(pnl,bot["id"]))
+                    c.commit(); continue
+                # Trailing / SL
+                if bot["trailing_enabled"] and t["side"]=="BUY":
+                    trail_high=t["trailing_high"] or entry
+                    if curr_p>trail_high:
+                        c.execute("UPDATE trades SET trailing_high=? WHERE id=?",(curr_p,t["id"])); trail_high=curr_p
+                    if curr_p<=trail_high*(1-sl/100):
+                        close_trade_auto(c,t,curr_p,uid,"demo")
+                        pnl=(curr_p-entry)*t["quantity"]
+                        c.execute("UPDATE bots SET total_pnl=total_pnl+?,trade_count=trade_count+1,last_signal='SL HIT' WHERE id=?",(pnl,bot["id"]))
+                        if pnl>=0: c.execute("UPDATE bots SET win_count=win_count+1 WHERE id=?",(bot["id"],))
+                        c.commit()
+                elif t["side"]=="BUY":
+                    if curr_p<=entry*(1-sl/100) or curr_p>=entry*(1+tp1/100):
+                        close_trade_auto(c,t,curr_p,uid,"demo")
+                        pnl=(curr_p-entry)*t["quantity"]
+                        c.execute("UPDATE bots SET total_pnl=total_pnl+?,trade_count=trade_count+1,last_signal='CLOSED' WHERE id=?",(pnl,bot["id"]))
+                        if pnl>=0: c.execute("UPDATE bots SET win_count=win_count+1 WHERE id=?",(bot["id"],))
+                        c.commit()
+            c.commit()
+            # Entry signal (only if no open trade for this bot)
+            if open_trades: continue
+            signal,rsi_val,_=get_signal(bot["strategy"],bot["pair"],bot["timeframe"],bot["params"] or "{}")
+            c.execute("UPDATE bots SET last_signal=?,last_run_at=? WHERE id=?",(f"{signal} RSI:{rsi_val:.1f}",datetime.utcnow().isoformat(),bot["id"]))
+            c.commit()
+            if signal!="BUY": continue
+            funds=c.execute("SELECT * FROM funds WHERE user_id=?",(uid,)).fetchone()
+            capital=min(bot["capital_usdt"] or 100, funds["demo_balance"] or 0)
+            if capital<10 or (funds["demo_balance"] or 0)<capital: continue
+            price=live_price(bot["pair"])
+            if price==0: continue
+            qty=round(capital/price,6)
+            c.execute("UPDATE funds SET demo_balance=? WHERE user_id=?",((funds["demo_balance"] or 0)-capital,uid))
+            c.execute("INSERT INTO trades (user_id,mode,pair,side,entry_price,quantity,status,strategy,trailing_stop_pct,take_profit_pct,tp2_pct,tp1_qty_pct,bot_id,tag) VALUES (?,?,?,?,?,?,'open',?,?,?,?,?,?,'Bot')",
+                      (uid,"demo",bot["pair"],"BUY",price,qty,f"BOT:{bot['strategy']}",bot["sl_pct"] or 1.5,bot["tp1_pct"] or 3.0,bot["tp2_pct"] or 6.0,50,bot["id"]))
+            add_alert(uid,"info",f"🤖 Bot '{bot['name']}' BUY {bot['pair']} @ ${price:,.2f} | {bot['strategy']} RSI:{rsi_val:.1f}","demo")
+            c.commit()
+    except Exception as e:
+        print("Multi-bot error:",e)
+    finally:
+        try: c.close()
+        except: pass
+
 def _bot_loop():
     while True:
         try: run_auto_bot()
         except Exception as e: print("Bot thread error:",e)
+        try: run_multi_bots()
+        except Exception as e: print("Multi-bot thread error:",e)
         time.sleep(60)
 
 threading.Thread(target=_bot_loop, daemon=True).start()
@@ -541,6 +758,101 @@ def close_trade(trade_id: int, user=Depends(current_user)):
     c.commit(); c.close()
     add_alert(user["id"],"success" if pnl>=0 else "error",f"{'✅' if pnl>=0 else '❌'} Closed {t['pair']} — PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)","demo")
     return {"trade_id":trade_id,"exit_price":exit_p,"pnl":pnl,"pnl_pct":pnl_pct,"new_balance":round(new_bal,2)}
+
+class PartialCloseReq(BaseModel):
+    close_pct: float  # 25, 50, 75, 100
+
+@app.post("/api/demo/trade/{trade_id}/partial-close")
+def partial_close(trade_id: int, req: PartialCloseReq, user=Depends(current_user)):
+    c=get_db()
+    t=c.execute("SELECT * FROM trades WHERE id=? AND user_id=? AND mode='demo' AND status='open'",(trade_id,user["id"])).fetchone()
+    if not t: c.close(); raise HTTPException(404,"Open trade not found")
+    if req.close_pct<=0 or req.close_pct>100: c.close(); raise HTTPException(400,"close_pct must be 1-100")
+    exit_p=live_price(t["pair"])
+    if exit_p==0: c.close(); raise HTTPException(400,"Could not fetch live price")
+    close_qty=round(t["quantity"]*(req.close_pct/100),6)
+    remaining_qty=round(t["quantity"]-close_qty,6)
+    entry=t["entry_price"] or t["avg_entry_price"] or exit_p
+    pnl=((exit_p-entry)*close_qty) if t["side"]=="BUY" else ((entry-exit_p)*close_qty)
+    pnl_pct=(((exit_p-entry)/entry)*100) if t["side"]=="BUY" else (((entry-exit_p)/entry)*100)
+    pnl=round(pnl,4); pnl_pct=round(pnl_pct,2)
+    returned=(entry*close_qty)+pnl
+    f=c.execute("SELECT * FROM funds WHERE user_id=?",(user["id"],)).fetchone()
+    new_bal=(f["demo_balance"] or 0)+returned
+    daily_loss=(f["daily_loss_used"] or 0)+(abs(pnl) if pnl<0 else 0)
+    c.execute("UPDATE funds SET demo_balance=?,daily_loss_used=? WHERE user_id=?",(new_bal,daily_loss,user["id"]))
+    if req.close_pct>=100 or remaining_qty<0.000001:
+        c.execute("UPDATE trades SET exit_price=?,pnl=?,pnl_pct=?,status='closed',closed_at=?,quantity=? WHERE id=?",
+                  (exit_p,pnl,pnl_pct,datetime.utcnow().isoformat(),close_qty,trade_id))
+        msg=f"{'✅' if pnl>=0 else '❌'} Closed 100% {t['pair']} @ ${exit_p:,.2f} PnL:${pnl:+.2f}"
+    else:
+        c.execute("UPDATE trades SET quantity=? WHERE id=?",(remaining_qty,trade_id))
+        msg=f"📤 Closed {req.close_pct:.0f}% {t['pair']} @ ${exit_p:,.2f} PnL:${pnl:+.2f} | Remaining:{remaining_qty}"
+    c.commit(); c.close()
+    add_alert(user["id"],"success" if pnl>=0 else "error",msg,"demo")
+    return {"trade_id":trade_id,"close_pct":req.close_pct,"exit_price":exit_p,"pnl":pnl,"pnl_pct":pnl_pct,"remaining_qty":remaining_qty,"new_balance":round(new_bal,2)}
+
+class ScaleInReq(BaseModel):
+    amount_usdt: float
+
+@app.post("/api/demo/trade/{trade_id}/scale-in")
+def scale_in(trade_id: int, req: ScaleInReq, user=Depends(current_user)):
+    c=get_db()
+    t=c.execute("SELECT * FROM trades WHERE id=? AND user_id=? AND mode='demo' AND status='open'",(trade_id,user["id"])).fetchone()
+    if not t: c.close(); raise HTTPException(404,"Open trade not found")
+    f=c.execute("SELECT * FROM funds WHERE user_id=?",(user["id"],)).fetchone()
+    if req.amount_usdt>(f["demo_balance"] or 0): c.close(); raise HTTPException(400,"Insufficient balance")
+    curr_price=live_price(t["pair"])
+    if curr_price==0: c.close(); raise HTTPException(400,"Could not fetch live price")
+    new_qty=round(req.amount_usdt/curr_price,6)
+    old_qty=t["quantity"]; old_entry=t["avg_entry_price"] or t["entry_price"] or curr_price
+    total_qty=old_qty+new_qty
+    avg_entry=round((old_entry*old_qty+curr_price*new_qty)/total_qty,2)
+    scale_count=(t["scale_count"] or 0)+1
+    c.execute("UPDATE funds SET demo_balance=? WHERE user_id=?",((f["demo_balance"] or 0)-req.amount_usdt,user["id"]))
+    c.execute("UPDATE trades SET quantity=?,avg_entry_price=?,scale_count=? WHERE id=?",(total_qty,avg_entry,scale_count,trade_id))
+    c.commit(); c.close()
+    add_alert(user["id"],"info",f"📥 Scale-in {t['pair']}: +{new_qty} @ ${curr_price:,.2f} | Avg entry:${avg_entry:,.2f}","demo")
+    return {"trade_id":trade_id,"new_qty":total_qty,"avg_entry":avg_entry,"scale_count":scale_count}
+
+class TPLevelsReq(BaseModel):
+    tp1_pct: Optional[float]=None; tp2_pct: Optional[float]=None
+    tp1_qty_pct: Optional[float]=None; breakeven_at_pct: Optional[float]=None
+
+@app.put("/api/demo/trade/{trade_id}/tp-levels")
+def set_tp_levels(trade_id: int, req: TPLevelsReq, user=Depends(current_user)):
+    c=get_db()
+    t=c.execute("SELECT * FROM trades WHERE id=? AND user_id=? AND status='open'",(trade_id,user["id"])).fetchone()
+    if not t: c.close(); raise HTTPException(404,"Open trade not found")
+    updates={}
+    if req.tp1_pct is not None: updates["take_profit_pct"]=req.tp1_pct
+    if req.tp2_pct is not None: updates["tp2_pct"]=req.tp2_pct
+    if req.tp1_qty_pct is not None: updates["tp1_qty_pct"]=req.tp1_qty_pct
+    if req.breakeven_at_pct is not None: updates["breakeven_at_pct"]=req.breakeven_at_pct
+    if updates:
+        c.execute(f"UPDATE trades SET {','.join(f'{k}=?' for k in updates)} WHERE id=?",(*updates.values(),trade_id))
+        c.commit()
+    t2=c.execute("SELECT * FROM trades WHERE id=?",(trade_id,)).fetchone(); c.close()
+    entry=t2["entry_price"] or 0; tp1=t2["take_profit_pct"] or 3.0; tp2=t2["tp2_pct"] or 6.0
+    return {"trade_id":trade_id,"tp1_pct":tp1,"tp2_pct":tp2,
+            "tp1_price":round(entry*(1+tp1/100),2),"tp2_price":round(entry*(1+tp2/100),2),
+            "tp1_qty_pct":t2["tp1_qty_pct"],"breakeven_at_pct":t2["breakeven_at_pct"]}
+
+class NoteReq(BaseModel):
+    notes: Optional[str]=None; tag: Optional[str]=None
+
+@app.put("/api/demo/trade/{trade_id}/note")
+def update_trade_note(trade_id: int, req: NoteReq, user=Depends(current_user)):
+    c=get_db()
+    t=c.execute("SELECT * FROM trades WHERE id=? AND user_id=?",(trade_id,user["id"])).fetchone()
+    if not t: c.close(); raise HTTPException(404,"Trade not found")
+    updates={}
+    if req.notes is not None: updates["notes"]=req.notes
+    if req.tag is not None: updates["tag"]=req.tag
+    if updates:
+        c.execute(f"UPDATE trades SET {','.join(f'{k}=?' for k in updates)} WHERE id=?",(*updates.values(),trade_id))
+        c.commit()
+    c.close(); return {"status":"updated"}
 
 @app.get("/api/demo/open-trades")
 def open_trades(user=Depends(current_user)):
@@ -925,6 +1237,73 @@ def create_price_alert(req: PriceAlertReq, user=Depends(current_user)):
 def delete_price_alert(aid: int, user=Depends(current_user)):
     c=get_db(); c.execute("DELETE FROM price_alerts WHERE id=? AND user_id=?",(aid,user["id"])); c.commit(); c.close()
     return {"status":"deleted"}
+
+# ── MULTI-BOT MANAGEMENT ─────────────────────────────────────────────────────
+class BotCreateReq(BaseModel):
+    name: str; pair: str="BTCUSDT"; timeframe: str="1h"; strategy: str="EMA"; params: str="{}"
+    capital_usdt: float=100; sl_pct: float=1.5; tp1_pct: float=3.0; tp2_pct: float=6.0
+    trailing_enabled: bool=True
+
+class BotUpdateReq(BaseModel):
+    name: Optional[str]=None; pair: Optional[str]=None; timeframe: Optional[str]=None
+    strategy: Optional[str]=None; params: Optional[str]=None
+    capital_usdt: Optional[float]=None; sl_pct: Optional[float]=None
+    tp1_pct: Optional[float]=None; tp2_pct: Optional[float]=None; trailing_enabled: Optional[bool]=None
+
+@app.get("/api/bots")
+def list_bots(user=Depends(current_user)):
+    c=get_db(); bots=c.execute("SELECT * FROM bots WHERE user_id=? ORDER BY created_at DESC",(user["id"],)).fetchall(); c.close()
+    return [dict(b) for b in bots]
+
+@app.post("/api/bots")
+def create_bot(req: BotCreateReq, user=Depends(current_user)):
+    c=get_db()
+    cur=c.execute("INSERT INTO bots (user_id,name,pair,timeframe,strategy,params,capital_usdt,sl_pct,tp1_pct,tp2_pct,trailing_enabled) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                  (user["id"],req.name,req.pair,req.timeframe,req.strategy,req.params,req.capital_usdt,req.sl_pct,req.tp1_pct,req.tp2_pct,1 if req.trailing_enabled else 0))
+    c.commit(); bot=c.execute("SELECT * FROM bots WHERE id=?",(cur.lastrowid,)).fetchone(); c.close()
+    return dict(bot)
+
+@app.get("/api/bots/{bot_id}")
+def get_bot(bot_id: int, user=Depends(current_user)):
+    c=get_db(); bot=c.execute("SELECT * FROM bots WHERE id=? AND user_id=?",(bot_id,user["id"])).fetchone(); c.close()
+    if not bot: raise HTTPException(404,"Bot not found"); return dict(bot)
+
+@app.put("/api/bots/{bot_id}")
+def update_bot_record(bot_id: int, req: BotUpdateReq, user=Depends(current_user)):
+    c=get_db()
+    if not c.execute("SELECT id FROM bots WHERE id=? AND user_id=?",(bot_id,user["id"])).fetchone():
+        c.close(); raise HTTPException(404,"Bot not found")
+    fields={k:v for k,v in req.dict().items() if v is not None}
+    if "trailing_enabled" in fields: fields["trailing_enabled"]=1 if fields["trailing_enabled"] else 0
+    if fields:
+        c.execute(f"UPDATE bots SET {','.join(f'{k}=?' for k in fields)} WHERE id=?",(*fields.values(),bot_id)); c.commit()
+    bot=c.execute("SELECT * FROM bots WHERE id=?",(bot_id,)).fetchone(); c.close(); return dict(bot)
+
+@app.delete("/api/bots/{bot_id}")
+def delete_bot(bot_id: int, user=Depends(current_user)):
+    c=get_db(); c.execute("DELETE FROM bots WHERE id=? AND user_id=?",(bot_id,user["id"])); c.commit(); c.close(); return {"status":"deleted"}
+
+@app.post("/api/bots/{bot_id}/start")
+def start_named_bot(bot_id: int, user=Depends(current_user)):
+    c=get_db(); bot=c.execute("SELECT * FROM bots WHERE id=? AND user_id=?",(bot_id,user["id"])).fetchone()
+    if not bot: c.close(); raise HTTPException(404,"Bot not found")
+    c.execute("UPDATE bots SET is_running=1 WHERE id=?",(bot_id,)); c.commit(); c.close()
+    add_alert(user["id"],"info",f"🤖 Bot '{bot['name']}' started ({bot['strategy']} on {bot['pair']})","demo")
+    return {"status":"started"}
+
+@app.post("/api/bots/{bot_id}/stop")
+def stop_named_bot(bot_id: int, user=Depends(current_user)):
+    c=get_db(); bot=c.execute("SELECT * FROM bots WHERE id=? AND user_id=?",(bot_id,user["id"])).fetchone()
+    if not bot: c.close(); raise HTTPException(404,"Bot not found")
+    c.execute("UPDATE bots SET is_running=0 WHERE id=?",(bot_id,)); c.commit(); c.close()
+    add_alert(user["id"],"warning",f"⏹ Bot '{bot['name']}' stopped","demo"); return {"status":"stopped"}
+
+@app.get("/api/bots/{bot_id}/signal")
+def bot_signal(bot_id: int, user=Depends(current_user)):
+    c=get_db(); bot=c.execute("SELECT * FROM bots WHERE id=? AND user_id=?",(bot_id,user["id"])).fetchone(); c.close()
+    if not bot: raise HTTPException(404,"Bot not found")
+    signal,rsi_val,info=get_signal(bot["strategy"],bot["pair"],bot["timeframe"],bot["params"] or "{}")
+    return {"signal":signal,"rsi":rsi_val,"info":info,"pair":bot["pair"],"strategy":bot["strategy"]}
 
 # ── SETTINGS ──────────────────────────────────────────────────────────────────
 class SettingsUpdate(BaseModel):
