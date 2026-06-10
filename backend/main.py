@@ -179,6 +179,11 @@ def init_db():
     ]:
         try: c.execute(stmt)
         except: pass
+    # Clean up secrets corrupted by the old save bug (masked '••••xxxx' written back to DB)
+    for f in ("binance_api_key","binance_secret_key","anthropic_api_key","groq_api_key",
+              "gemini_api_key","openrouter_api_key","email_password","telegram_bot_token"):
+        try: c.execute(f"UPDATE settings SET {f}=NULL WHERE {f} LIKE '%••%'")
+        except: pass
     c.commit()
     try:
         pw = bcrypt.hashpw(b"demo123", bcrypt.gensalt()).decode()
@@ -1329,9 +1334,16 @@ def get_settings(user=Depends(current_user)):
         if d.get(k): d[k]="••••"+d[k][-4:]
     return d
 
+SECRET_FIELDS={"binance_api_key","binance_secret_key","anthropic_api_key","groq_api_key",
+               "gemini_api_key","openrouter_api_key","email_password","telegram_bot_token"}
+
 @app.put("/api/settings")
 def update_settings(req: SettingsUpdate, user=Depends(current_user)):
     c=get_db(); fields={k:v for k,v in req.dict().items() if v is not None}
+    # Never overwrite a stored secret with its masked placeholder (••••xxxx) or an empty string —
+    # the GET endpoint returns masked values and the frontend echoes the whole object back on save.
+    fields={k:v for k,v in fields.items()
+            if not (k in SECRET_FIELDS and isinstance(v,str) and ("••" in v or v.strip()==""))}
     if fields: c.execute(f"UPDATE settings SET {','.join(f'{k}=?' for k in fields)} WHERE user_id=?",(*fields.values(),user["id"]))
     c.commit(); c.close(); return {"status":"updated"}
 

@@ -1427,19 +1427,19 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
             {id:"groq",label:"Groq",badge:"FREE",color:"text-emerald-400",bg:"bg-emerald-500/15 border-emerald-500/30",
               desc:"14,400 req/day free · Blazing fast Llama models",link:"console.groq.com",
               models:["llama-3.3-70b-versatile","llama-3.1-8b-instant","mixtral-8x7b-32768","gemma2-9b-it"],
-              keyField:"groq_api_key",keyPlaceholder:"gsk_…",keyMask:v=>v?.startsWith("••")},
+              keyField:"groq_api_key",keyPlaceholder:"gsk_…",keyMask:v=>v?.includes("••")},
             {id:"gemini",label:"Gemini",badge:"FREE",color:"text-blue-400",bg:"bg-blue-500/15 border-blue-500/30",
               desc:"1M tokens/day free · Google's fastest model",link:"aistudio.google.com",
               models:["gemini-1.5-flash","gemini-2.0-flash-lite","gemini-1.5-pro"],
-              keyField:"gemini_api_key",keyPlaceholder:"AIzaSy…",keyMask:v=>v?.startsWith("••")},
+              keyField:"gemini_api_key",keyPlaceholder:"AIzaSy…",keyMask:v=>v?.includes("••")},
             {id:"openrouter",label:"OpenRouter",badge:"FREE",color:"text-violet-400",bg:"bg-violet-500/15 border-violet-500/30",
               desc:"20+ free models · Pick any LLM",link:"openrouter.ai",
               models:["meta-llama/llama-3.3-70b-instruct:free","deepseek/deepseek-chat-v3-0324:free","qwen/qwen-2.5-72b-instruct:free","google/gemma-3-27b-it:free","mistralai/mistral-7b-instruct:free"],
-              keyField:"openrouter_api_key",keyPlaceholder:"sk-or-…",keyMask:v=>v?.startsWith("••")},
+              keyField:"openrouter_api_key",keyPlaceholder:"sk-or-…",keyMask:v=>v?.includes("••")},
             {id:"anthropic",label:"Anthropic",badge:"PAID",color:"text-amber-400",bg:"bg-amber-500/15 border-amber-500/30",
               desc:"Claude Haiku ~$0.001/msg · Best quality",link:"console.anthropic.com",
               models:["claude-haiku-4-5-20251001","claude-sonnet-4-6"],
-              keyField:"anthropic_api_key",keyPlaceholder:"sk-ant-…",keyMask:v=>v?.startsWith("sk-ant")},
+              keyField:"anthropic_api_key",keyPlaceholder:"sk-ant-…",keyMask:v=>v?.includes("••")},
           ];
           const cur=PROVIDERS.find(p=>p.id===provider)||PROVIDERS[0];
           const curKeyVal=settings[cur.keyField]||"";
@@ -1467,8 +1467,9 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
               </div>
               <input type="password" value={masked?"":curKeyVal}
                 onChange={e=>setSettings(s=>({...s,[cur.keyField]:e.target.value}))}
-                placeholder={cur.keyPlaceholder}
+                placeholder={masked?"Key saved — enter a new key only to replace it":cur.keyPlaceholder}
                 className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-cyan-500 transition-colors placeholder-slate-600"/>
+              {masked && <p className="text-emerald-400 text-xs flex items-center gap-1.5"><Icon name="check" size={12}/>Key saved ({curKeyVal}) — it stays saved even if this box looks empty</p>}
               {cur.id!=="anthropic" && <div className="text-xs space-y-1 text-slate-400">
                 {cur.id==="groq" && <><p>1. Go to <strong className="text-white">console.groq.com</strong> → Create account (free)</p><p>2. API Keys → Create new key → copy it</p><p>3. Paste above → Save → test in AI Advisor chat</p></>}
                 {cur.id==="gemini" && <><p>1. Go to <strong className="text-white">aistudio.google.com</strong> → Sign in with Google</p><p>2. Get API key → Create API key → copy it</p><p>3. Free: 1,500 req/day + 1M tokens/day on Flash</p></>}
