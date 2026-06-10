@@ -1609,29 +1609,48 @@ const PROVIDER_META={
 };
 
 const ChatPage = ({ token, user, mode }) => {
-  const [messages,setMessages]=useState([{role:"assistant",content:`👋 Hi! I'm your CryptoBot AI advisor.\nYou're in **${mode.toUpperCase()} mode**.\n\nAsk me about strategies, risk management, or how to configure your bot.`}]);
+  const GREETING={role:"assistant",content:`👋 Hi! I'm your CryptoBot AI advisor.\nYou're in **${mode.toUpperCase()} mode**.\n\nAsk me about strategies, risk management, or how to configure your bot.`};
+  const [messages,setMessages]=useState([GREETING]);
   const [input,setInput]=useState("");
   const [loading,setLoading]=useState(false);
   const [providers,setProviders]=useState([]);
   const [activeProvider,setActiveProvider]=useState("");  // ""=settings default
+  const [models,setModels]=useState([]);
+  const [activeModel,setActiveModel]=useState("");        // ""=provider default
   const bottomRef=useRef(null);
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); },[messages]);
   useEffect(()=>{
     api("/api/chat/providers",{},token).then(r=>{
       if(r?.providers){ setProviders(r.providers); setActiveProvider(r.default||""); }
     });
+    // Restore saved conversation
+    api("/api/chat/history",{},token).then(rows=>{
+      if(Array.isArray(rows)&&rows.length)
+        setMessages(rows.map(r=>({role:r.role,content:r.content,provider:r.provider,id:r.id})));
+    });
   },[token]);
+  // Model list for the selected provider (OpenRouter list is live free models)
+  useEffect(()=>{
+    if(!activeProvider||activeProvider==="all"){ setModels([]); setActiveModel(""); return; }
+    api(`/api/chat/models?provider=${activeProvider}`,{},token).then(r=>{ setModels(r?.models||[]); setActiveModel(""); });
+  },[activeProvider,token]);
+  const clearChat=async()=>{
+    if(!window.confirm("Delete entire chat history?")) return;
+    await api("/api/chat/history",{method:"DELETE"},token);
+    setMessages([GREETING]);
+  };
   const send = async()=>{
     if(!input.trim()||loading) return;
     const userMsg=input.trim(); setInput("");
     setMessages(m=>[...m,{role:"user",content:userMsg}]); setLoading(true);
     try {
       const apiMsgs=messages.concat([{role:"user",content:userMsg}])
-        .filter((m,i)=>m.role!=="assistant"||i>0)
-        .filter(m=>m.role==="user"||typeof m.content==="string")
-        .map(m=>({role:m.role,content:m.content}));
+        .filter(m=>typeof m.content==="string"&&m.content!=="__CREDIT_ERROR__"&&m.content!==GREETING.content)
+        .map(m=>({role:m.role,content:m.content}))
+        .slice(-20);
       const body={messages:apiMsgs,mode};
       if(activeProvider) body.provider=activeProvider;
+      if(activeModel) body.model=activeModel;
       const data=await api("/api/chat",{method:"POST",body:JSON.stringify(body)},token);
       const errMsg=data.detail||"";
       if(errMsg.includes("credit balance")||errMsg.includes("Plans & Billing")){
@@ -1671,6 +1690,18 @@ const ChatPage = ({ token, user, mode }) => {
               ⚡ Compare All
             </button>
           )}
+          {activeProvider&&activeProvider!=="all"&&models.length>0 && (
+            <select value={activeModel} onChange={e=>setActiveModel(e.target.value)}
+              title="Pick the model for the selected AI"
+              className="text-xs bg-slate-800 border border-slate-700 rounded-full px-3 py-1.5 text-slate-300 focus:outline-none focus:border-cyan-500 transition-colors max-w-[230px]">
+              <option value="">Model: default</option>
+              {models.map(m=><option key={m} value={m}>{m}</option>)}
+            </select>
+          )}
+          <button onClick={clearChat} title="Delete entire chat history"
+            className="text-xs px-3 py-1.5 rounded-full border border-slate-700 bg-slate-800 text-slate-400 hover:text-red-400 hover:border-red-500/40 transition-all font-semibold">
+            🗑 Clear
+          </button>
         </div>
       </div>
       <div className="flex-1 bg-slate-900 border border-slate-800 rounded-xl flex flex-col overflow-hidden">

@@ -176,6 +176,7 @@ def init_db():
         "ALTER TABLE trades ADD COLUMN tp1_qty_pct REAL DEFAULT 50",
         "ALTER TABLE trades ADD COLUMN breakeven_at_pct REAL",
         "ALTER TABLE trades ADD COLUMN breakeven_activated INTEGER DEFAULT 0",
+        "ALTER TABLE chat_messages ADD COLUMN provider TEXT",
     ]:
         try: c.execute(stmt)
         except: pass
@@ -1439,6 +1440,7 @@ def daily_summary(user=Depends(current_user)):
 class ChatReq(BaseModel):
     messages: list; mode: str="demo"
     provider: Optional[str]=None  # override settings: groq|gemini|openrouter|anthropic|all
+    model: Optional[str]=None     # per-request model override (from chat page dropdown)
 
 AI_SYSTEM = "You are CryptoBot Pro's AI trading advisor. Be concise and practical. Focus on EMA/RSI/MACD strategy, Binance, risk management, and demo vs live trading best practices."
 
@@ -1467,6 +1469,27 @@ def _gemini(api_key, model, system, messages):
 
 PROVIDER_LABELS={"groq":"Groq (Llama 3.3)","gemini":"Google Gemini","openrouter":"OpenRouter","anthropic":"Claude (Anthropic)"}
 
+_OR_FREE_CACHE={"ts":0,"models":[]}
+def openrouter_free_models():
+    """Live list of currently-free OpenRouter models (cached 1h) — hardcoded slugs go stale."""
+    if time.time()-_OR_FREE_CACHE["ts"]<3600 and _OR_FREE_CACHE["models"]:
+        return _OR_FREE_CACHE["models"]
+    try:
+        r=requests.get("https://openrouter.ai/api/v1/models",timeout=10)
+        data=json.loads(r.content.decode("utf-8"))
+        free=[str(m.get("id","")) for m in data.get("data",[]) if str(m.get("id","")).endswith(":free")]
+        def prio(mid):
+            for i,kw in enumerate(("llama-3.3","deepseek","qwen","llama","gemma","mistral")):
+                if kw in mid.lower(): return i
+            return 99
+        free.sort(key=prio)
+        if free:
+            _OR_FREE_CACHE["ts"]=time.time(); _OR_FREE_CACHE["models"]=free
+            return free
+    except Exception as e:
+        print("OpenRouter model list error:",e)
+    return ["meta-llama/llama-3.3-70b-instruct:free","deepseek/deepseek-chat-v3-0324:free","qwen/qwen-2.5-72b-instruct:free"]
+
 def _provider_key(s, provider):
     """Return the saved API key for a provider, or '' if not configured."""
     if provider=="groq": return (s and s["groq_api_key"]) or ""
@@ -1484,15 +1507,9 @@ def _call_provider(provider, key, model_override, system, messages):
     elif provider=="openrouter":
         if not key: raise HTTPException(400,"No OpenRouter API key — add it in Settings → AI Advisor (free at openrouter.ai)")
         hdrs={"HTTP-Referer":"http://localhost:3000","X-Title":"CryptoBot Pro"}
-        # OpenRouter rotates its free models — try a chain of free slugs until one works.
+        # OpenRouter rotates its free models — fetch the live free list and try until one works.
         # A saved model is tried first, but if it was retired we still fall through the chain.
-        free_chain=[
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "deepseek/deepseek-chat-v3-0324:free",
-            "qwen/qwen-2.5-72b-instruct:free",
-            "google/gemma-3-27b-it:free",
-            "mistralai/mistral-7b-instruct:free",
-        ]
+        free_chain=openrouter_free_models()[:6]
         candidates=([model_override] if model_override else [])+[m for m in free_chain if m!=model_override]
         last_err="OpenRouter error"
         for m in candidates:
@@ -1531,32 +1548,84 @@ def chat_providers(user=Depends(current_user)):
         out.append({"id":p,"label":PROVIDER_LABELS[p],"configured":bool(_provider_key(s,p))})
     return {"providers":out,"default":(s and s["ai_provider"]) or "anthropic"}
 
+PROVIDER_MODELS={
+    "groq":["llama-3.3-70b-versatile","llama-3.1-8b-instant","deepseek-r1-distill-llama-70b","gemma2-9b-it"],
+    "gemini":["gemini-1.5-flash","gemini-2.0-flash","gemini-1.5-pro"],
+    "anthropic":["claude-haiku-4-5-20251001","claude-sonnet-4-6"],
+}
+
+@app.get("/api/chat/models")
+def chat_models(provider: str="openrouter", user=Depends(current_user)):
+    """Model list for the chat page dropdown — OpenRouter list is fetched live (free models only)."""
+    if provider=="openrouter": return {"models":openrouter_free_models()[:30]}
+    return {"models":PROVIDER_MODELS.get(provider,[])}
+
+def _save_chat(uid, role, content, provider=None):
+    try:
+        c=get_db(); c.execute("INSERT INTO chat_messages (user_id,role,content,provider) VALUES (?,?,?,?)",(uid,role,content,provider)); c.commit(); c.close()
+    except Exception as e:
+        print("Chat save error:",e)
+
+@app.get("/api/chat/history")
+def chat_history(user=Depends(current_user)):
+    c=get_db(); rows=c.execute("SELECT id,role,content,provider,created_at FROM chat_messages WHERE user_id=? ORDER BY id ASC LIMIT 500",(user["id"],)).fetchall(); c.close()
+    return [dict(r) for r in rows]
+
+@app.delete("/api/chat/history")
+def clear_chat_history(user=Depends(current_user)):
+    c=get_db(); c.execute("DELETE FROM chat_messages WHERE user_id=?",(user["id"],)); c.commit(); c.close()
+    return {"status":"cleared"}
+
+@app.delete("/api/chat/history/{mid}")
+def delete_chat_message(mid: int, user=Depends(current_user)):
+    c=get_db(); c.execute("DELETE FROM chat_messages WHERE id=? AND user_id=?",(mid,user["id"])); c.commit(); c.close()
+    return {"status":"deleted"}
+
 @app.post("/api/chat")
 def ai_chat(req: ChatReq, user=Depends(current_user)):
     c=get_db(); s=c.execute("SELECT * FROM settings WHERE user_id=?",(user["id"],)).fetchone(); c.close()
     provider=req.provider or (s and s["ai_provider"]) or "anthropic"
-    model_override=(s and s["ai_model"]) or None
+    # explicit model from chat dropdown wins; settings ai_model applies only with the settings default provider
+    model_override=req.model or (None if req.provider else ((s and s["ai_model"]) or None))
     system=f"{AI_SYSTEM} User is in {req.mode.upper()} mode."
+    # Sanitize history: collapse consecutive same-role messages (Compare-All saves several
+    # assistant rows in a row, which Anthropic/Gemini reject), start with user, cap at 20
+    msgs=[]
+    for m in req.messages:
+        role=m.get("role"); content=str(m.get("content","") or "")
+        if not content or role not in ("user","assistant"): continue
+        if msgs and msgs[-1]["role"]==role: msgs[-1]["content"]+="\n\n"+content
+        else: msgs.append({"role":role,"content":content})
+    msgs=msgs[-20:]
+    while msgs and msgs[0]["role"]!="user": msgs.pop(0)
+    if not msgs: raise HTTPException(400,"No user message")
+    last_user=msgs[-1]["content"] if msgs[-1]["role"]=="user" else None
     try:
         # Compare mode: ask every configured provider at once
         if provider=="all":
             configured=[p for p in ("groq","gemini","openrouter","anthropic") if _provider_key(s,p)]
             if not configured: raise HTTPException(400,"No AI provider keys configured — add at least one in Settings → AI Advisor")
-            results=[]
             from concurrent.futures import ThreadPoolExecutor
             def ask(p):
                 try:
                     return {"provider":p,"label":PROVIDER_LABELS[p],
-                            "content":_call_provider(p,_provider_key(s,p),None,system,req.messages)}
+                            "content":_call_provider(p,_provider_key(s,p),None,system,msgs)}
                 except HTTPException as e:
                     return {"provider":p,"label":PROVIDER_LABELS[p],"error":str(e.detail)}
                 except Exception as e:
                     return {"provider":p,"label":PROVIDER_LABELS[p],"error":str(e)}
             with ThreadPoolExecutor(max_workers=4) as pool:
                 results=list(pool.map(ask,configured))
+            if last_user and any(r.get("content") for r in results):
+                _save_chat(user["id"],"user",last_user)
+                for r in results:
+                    if r.get("content"): _save_chat(user["id"],"assistant",r["content"],r["provider"])
             return {"results":results,"mode":"all"}
         # Single provider (request override or settings default)
-        content=_call_provider(provider,_provider_key(s,provider),model_override,system,req.messages)
+        content=_call_provider(provider,_provider_key(s,provider),model_override,system,msgs)
+        if last_user:
+            _save_chat(user["id"],"user",last_user)
+            _save_chat(user["id"],"assistant",content,provider)
         return {"content":content,"provider":provider,"label":PROVIDER_LABELS.get(provider,provider)}
     except HTTPException: raise
     except UnicodeEncodeError as e:
