@@ -346,12 +346,12 @@ def get_signal(strategy, pair, interval="1h", params_json="{}"):
             return "HOLD",rsi,{"sma_fast":round(sma50[-1],2),"sma_slow":round(sma_slow[-1],2)}
 
         elif s=="SUPER":
-            period=params.get("st_period",10); mult=params.get("st_mult",3.0)
-            trend,level=calc_supertrend(highs,lows,closes,period,mult)
-            if trend is None: return "HOLD",rsi,{}
-            if trend==1 and rsi<70: return "BUY",rsi,{"trend":"UP","level":round(level,2)}
-            if trend==-1 and rsi>30: return "SELL",rsi,{"trend":"DOWN","level":round(level,2)}
-            return "HOLD",rsi,{"level":round(level,2) if level else 0}
+            period=int(params.get("st_period",10)); mult=float(params.get("st_mult",3.0))
+            st=_supertrend_series(highs,lows,closes,period,mult)
+            if len(st)<2 or st[-1] is None or st[-2] is None: return "HOLD",rsi,{}
+            if st[-1]==1 and st[-2]==-1 and rsi<70: return "BUY",rsi,{"trend":"FLIP UP"}
+            if st[-1]==-1 and st[-2]==1 and rsi>30: return "SELL",rsi,{"trend":"FLIP DOWN"}
+            return "HOLD",rsi,{"trend":"UP" if st[-1]==1 else "DOWN"}
 
         return "HOLD",rsi,{}
     except Exception as e:
@@ -1023,6 +1023,254 @@ def run_backtest(req: BacktestReq, user=Depends(current_user)):
         "profit_factor":round(sum(wins)/abs(sum(losses)),2) if losses and sum(losses)!=0 else 0,
         "trades":trades,"equity_curve":equity_curve,
     }
+
+# ── ADVANCED MULTI-STRATEGY BACKTEST ─────────────────────────────────────────
+def _ema_full(closes, period):
+    e=calc_ema(closes,period)
+    return ([None]*(period-1)+e) if e else [None]*len(closes)
+
+def _sma_full(closes, period):
+    s=calc_sma(closes,period)
+    return ([None]*(period-1)+s) if s else [None]*len(closes)
+
+def _rsi_full(closes, period=14):
+    out=[50.0]*len(closes)
+    for i in range(period,len(closes)):
+        w=closes[i-period:i+1]
+        chg=[w[j]-w[j-1] for j in range(1,len(w))]
+        g=sum(c for c in chg if c>0)/period; l=sum(-c for c in chg if c<0)/period
+        out[i]=100.0 if l==0 else 100-100/(1+g/l)
+    return out
+
+def _macd_full(closes, fast=12, slow=26, sig=9):
+    ef=_ema_full(closes,fast); es=_ema_full(closes,slow)
+    macd=[(ef[i]-es[i]) if (ef[i] is not None and es[i] is not None) else None for i in range(len(closes))]
+    vals=[m for m in macd if m is not None]
+    sig_full=[None]*len(closes)
+    if len(vals)>=sig:
+        sl_=calc_ema(vals,sig); start=(slow-1)+(sig-1)
+        for k,v in enumerate(sl_):
+            if start+k<len(closes): sig_full[start+k]=v
+    return macd,sig_full
+
+def _boll_at(closes, i, period=20, stddev=2.0):
+    if i+1<period: return None,None,None
+    w=closes[i+1-period:i+1]; mid=sum(w)/period
+    std=math.sqrt(sum((p-mid)**2 for p in w)/period)
+    return mid+stddev*std, mid, mid-stddev*std
+
+def _supertrend_series(highs, lows, closes, period=10, mult=3.0):
+    """Proper stateful Supertrend: final-band carry-over, flips on band breaks. Returns trend per candle (1/-1/None)."""
+    n=len(closes); trend=[None]*n
+    if n<period+2: return trend
+    trs=[0.0]*n
+    for j in range(1,n):
+        trs[j]=max(highs[j]-lows[j],abs(highs[j]-closes[j-1]),abs(lows[j]-closes[j-1]))
+    fu=[None]*n; fl=[None]*n; t=1
+    for j in range(period,n):
+        atr=sum(trs[j-period+1:j+1])/period
+        mid=(highs[j]+lows[j])/2
+        bu=mid+mult*atr; bl=mid-mult*atr
+        fu[j]=bu if (fu[j-1] is None or bu<fu[j-1] or closes[j-1]>fu[j-1]) else fu[j-1]
+        fl[j]=bl if (fl[j-1] is None or bl>fl[j-1] or closes[j-1]<fl[j-1]) else fl[j-1]
+        if t==1 and closes[j]<fl[j]: t=-1
+        elif t==-1 and closes[j]>fu[j]: t=1
+        trend[j]=t
+    return trend
+
+def _bt_signal(strategy, i, closes, highs, lows, ind, params):
+    """Per-candle signal for the advanced backtest — mirrors live get_signal logic."""
+    rsi=ind["rsi"][i]
+    if strategy=="EMA":
+        ef,es=ind["ema_f"],ind["ema_s"]
+        if ef[i] is None or es[i] is None or ef[i-1] is None or es[i-1] is None: return "HOLD"
+        if ef[i]>es[i] and ef[i-1]<=es[i-1] and 45<=rsi<=65: return "BUY"
+        if ef[i]<es[i] and ef[i-1]>=es[i-1]: return "SELL"
+    elif strategy=="MACD":
+        m,sg=ind["macd"],ind["macd_sig"]
+        if m[i] is None or sg[i] is None or m[i-1] is None or sg[i-1] is None: return "HOLD"
+        if m[i]>sg[i] and m[i-1]<=sg[i-1] and rsi<70: return "BUY"
+        if m[i]<sg[i] and m[i-1]>=sg[i-1] and rsi>30: return "SELL"
+    elif strategy=="BB":
+        up,mid,lo=_boll_at(closes,i,int(params.get("bb_period",20)),float(params.get("bb_std",2.0)))
+        if up is None: return "HOLD"
+        if closes[i]<=lo and rsi<35: return "BUY"
+        if closes[i]>=up and rsi>65: return "SELL"
+    elif strategy=="RSI_REV":
+        if rsi<=float(params.get("oversold",30)): return "BUY"
+        if rsi>=float(params.get("overbought",70)): return "SELL"
+    elif strategy=="GOLDEN":
+        f,s=ind["sma_f"],ind["sma_s"]
+        if f[i] is None or s[i] is None or f[i-1] is None or s[i-1] is None: return "HOLD"
+        if f[i]>s[i] and f[i-1]<=s[i-1]: return "BUY"
+        if f[i]<s[i] and f[i-1]>=s[i-1]: return "SELL"
+    elif strategy=="SUPER":
+        st=ind.get("st",[])
+        if i>=len(st) or st[i] is None or st[i-1] is None: return "HOLD"
+        if st[i]==1 and st[i-1]==-1 and rsi<70: return "BUY"
+        if st[i]==-1 and st[i-1]==1 and rsi>30: return "SELL"
+    return "HOLD"
+
+class AdvBacktestReq(BaseModel):
+    symbol: str="BTCUSDT"; interval: str="1h"
+    start_date: str; end_date: str
+    strategy: str="EMA"; params: str="{}"
+    initial_balance: float=10000; trade_amount: float=500
+    sl_pct: float=1.5; tp1_pct: float=3.0; tp2_pct: float=6.0; tp1_qty_pct: float=50
+    trailing_enabled: bool=True
+
+@app.post("/api/backtest/advanced")
+def run_advanced_backtest(req: AdvBacktestReq, user=Depends(current_user)):
+    """Backtest any of the 6 bot strategies with TP1 partial close, TP2, trailing stop."""
+    try:
+        start_dt=datetime.strptime(req.start_date,"%Y-%m-%d"); end_dt=datetime.strptime(req.end_date,"%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400,"Invalid date — use YYYY-MM-DD")
+    start_ms=int(start_dt.timestamp()*1000); end_ms=int(end_dt.timestamp()*1000)
+    if end_ms<=start_ms: raise HTTPException(400,"End date must be after start date")
+    if (end_ms-start_ms)>730*86400*1000: raise HTTPException(400,"Maximum range is 2 years")
+    strategy=req.strategy.upper()
+    if strategy not in ("EMA","MACD","BB","RSI_REV","GOLDEN","SUPER"): raise HTTPException(400,f"Unknown strategy {strategy}")
+    if req.trade_amount<=0 or req.trade_amount>req.initial_balance: raise HTTPException(400,"Trade amount must be > 0 and ≤ initial balance")
+    try: params=json.loads(req.params or "{}")
+    except: params={}
+
+    klines=fetch_historical_klines(req.symbol.upper(),req.interval,start_ms,end_ms)
+    warmup=210 if strategy=="GOLDEN" else 60
+    if len(klines)<warmup+20: raise HTTPException(400,f"Not enough data — {len(klines)} candles, need ≥ {warmup+20}. Use a wider date range or larger interval.")
+    closes=[float(k[4]) for k in klines]; highs=[float(k[2]) for k in klines]; lows=[float(k[3]) for k in klines]; times=[k[0] for k in klines]
+
+    ind={"rsi":_rsi_full(closes,14)}
+    if strategy=="EMA":
+        ind["ema_f"]=_ema_full(closes,int(params.get("ema_fast",21))); ind["ema_s"]=_ema_full(closes,int(params.get("ema_slow",55)))
+    elif strategy=="MACD":
+        ind["macd"],ind["macd_sig"]=_macd_full(closes)
+    elif strategy=="GOLDEN":
+        slow=200 if len(closes)>=220 else 100
+        ind["sma_f"]=_sma_full(closes,50); ind["sma_s"]=_sma_full(closes,slow)
+    elif strategy=="SUPER":
+        ind["st"]=_supertrend_series(highs,lows,closes,int(params.get("st_period",10)),float(params.get("st_mult",3.0)))
+
+    balance=req.initial_balance; pos=None
+    trades=[]; equity=[]; peak=balance; maxdd=0.0
+    tp1_hits=0; tp2_hits=0; sl_hits=0; hold_candles=[]
+
+    def record(exit_p,qty,reason,dt,entry,entry_t,entry_i,i):
+        nonlocal balance
+        pnl=(exit_p-entry)*qty; pnl_pct=((exit_p-entry)/entry)*100
+        balance+=entry*qty+pnl
+        trades.append({"entry_date":entry_t,"exit_date":dt,"side":"BUY","entry_price":round(entry,2),
+            "exit_price":round(exit_p,2),"quantity":round(qty,6),"pnl":round(pnl,4),"pnl_pct":round(pnl_pct,2),"exit_reason":reason})
+        hold_candles.append(i-entry_i)
+
+    for i in range(warmup,len(closes)):
+        price=closes[i]; high=highs[i]; low=lows[i]
+        dt=datetime.utcfromtimestamp(times[i]/1000).strftime("%Y-%m-%d %H:%M")
+        if pos:
+            stop=(pos["trail_high"]*(1-req.sl_pct/100)) if req.trailing_enabled else (pos["entry"]*(1-req.sl_pct/100))
+            tp1_price=pos["entry"]*(1+req.tp1_pct/100); tp2_price=pos["entry"]*(1+req.tp2_pct/100)
+            if low<=stop:
+                record(stop,pos["qty"],"stop_loss",dt,pos["entry"],pos["time"],pos["entry_i"],i); sl_hits+=1; pos=None
+            elif not pos["tp1_done"] and high>=tp1_price:
+                qty1=pos["qty"]*(req.tp1_qty_pct/100)
+                record(tp1_price,qty1,"tp1_partial",dt,pos["entry"],pos["time"],pos["entry_i"],i); tp1_hits+=1
+                pos["qty"]-=qty1; pos["tp1_done"]=True
+                if pos["qty"]<=0: pos=None
+            elif pos["tp1_done"] and high>=tp2_price:
+                record(tp2_price,pos["qty"],"tp2",dt,pos["entry"],pos["time"],pos["entry_i"],i); tp2_hits+=1; pos=None
+            else:
+                sig=_bt_signal(strategy,i,closes,highs,lows,ind,params)
+                if sig=="SELL":
+                    record(price,pos["qty"],"signal_exit",dt,pos["entry"],pos["time"],pos["entry_i"],i); pos=None
+            if pos and req.trailing_enabled and high>pos["trail_high"]: pos["trail_high"]=high
+        if not pos:
+            sig=_bt_signal(strategy,i,closes,highs,lows,ind,params)
+            if sig=="BUY" and req.trade_amount<=balance:
+                qty=req.trade_amount/price; balance-=req.trade_amount
+                pos={"entry":price,"qty":qty,"time":dt,"trail_high":price,"tp1_done":False,"entry_i":i}
+        eq=balance+(pos["qty"]*price if pos else 0)
+        equity.append({"date":dt,"balance":round(eq,2)})
+        peak=max(peak,eq); maxdd=max(maxdd,((peak-eq)/peak)*100 if peak else 0)
+
+    if pos:
+        dt=datetime.utcfromtimestamp(times[-1]/1000).strftime("%Y-%m-%d %H:%M")
+        record(closes[-1],pos["qty"],"period_end",dt,pos["entry"],pos["time"],pos["entry_i"],len(closes)-1)
+
+    pnls=[t["pnl"] for t in trades]
+    wins=[p for p in pnls if p>0]; losses=[p for p in pnls if p<=0]
+    if len(equity)>600:
+        step=max(1,len(equity)//600); equity=equity[::step]
+
+    return {
+        "symbol":req.symbol.upper(),"interval":req.interval,"strategy":strategy,
+        "start_date":req.start_date,"end_date":req.end_date,"candles_used":len(klines),
+        "initial_balance":req.initial_balance,"final_balance":round(balance,2),
+        "total_return_pct":round((balance-req.initial_balance)/req.initial_balance*100,2),
+        "total_pnl":round(sum(pnls),2),"total_trades":len(trades),
+        "winning_trades":len(wins),"losing_trades":len(losses),
+        "win_rate":round(len(wins)/len(trades)*100,1) if trades else 0,
+        "avg_pnl":round(sum(pnls)/len(pnls),2) if pnls else 0,
+        "best_trade":round(max(pnls),2) if pnls else 0,
+        "worst_trade":round(min(pnls),2) if pnls else 0,
+        "max_drawdown_pct":round(maxdd,2),
+        "profit_factor":round(sum(wins)/abs(sum(losses)),2) if losses and sum(losses)!=0 else 0,
+        "tp1_hits":tp1_hits,"tp2_hits":tp2_hits,"sl_hits":sl_hits,
+        "avg_hold_candles":round(sum(hold_candles)/len(hold_candles),1) if hold_candles else 0,
+        "sl_pct":req.sl_pct,"tp1_pct":req.tp1_pct,"tp2_pct":req.tp2_pct,"trailing_enabled":req.trailing_enabled,
+        "trades":trades,"equity_curve":equity,
+    }
+
+# ── AI STRATEGY GENERATOR ─────────────────────────────────────────────────────
+class AIStrategyReq(BaseModel):
+    pair: str="BTCUSDT"; timeframe: str="1h"; risk: str="medium"
+    goal: Optional[str]=None
+
+@app.post("/api/ai/strategy")
+def ai_suggest_strategy(req: AIStrategyReq, user=Depends(current_user)):
+    """Ask the configured AI to design a bot strategy config (JSON), ready to backtest or deploy."""
+    c=get_db(); s=c.execute("SELECT * FROM settings WHERE user_id=?",(user["id"],)).fetchone(); c.close()
+    provider=(s and s["ai_provider"]) or "anthropic"
+    key=_provider_key(s,provider)
+    if not key:
+        for p in ("groq","gemini","openrouter","anthropic"):
+            if _provider_key(s,p): provider=p; key=_provider_key(s,p); break
+    if not key: raise HTTPException(400,"No AI provider configured — add a key in Settings → AI Advisor")
+    market=""
+    try:
+        r=requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={req.pair}",timeout=5).json()
+        market=f"Current market: last price ${float(r.get('lastPrice',0)):,.2f}, 24h change {r.get('priceChangePercent')}%, 24h volume {float(r.get('volume',0)):,.0f}."
+    except: pass
+    prompt=(f"Design a crypto trading bot strategy for {req.pair} on the {req.timeframe} timeframe. "
+        f"Risk tolerance: {req.risk}. "
+        +(f"User goal: {req.goal}. " if req.goal else "")
+        +market+" "
+        "Choose exactly ONE strategy from this list with its params: "
+        "EMA (params: ema_fast, ema_slow), MACD (params: none), BB (params: bb_period, bb_std), "
+        "RSI_REV (params: oversold, overbought), GOLDEN (params: none), SUPER (params: st_period, st_mult). "
+        "Reply with ONLY a raw JSON object, no markdown fences, exactly this shape: "
+        '{"name": "short bot name", "strategy": "EMA", "params": {}, "sl_pct": 1.5, "tp1_pct": 3.0, "tp2_pct": 6.0, '
+        '"trailing_enabled": true, "capital_usdt": 100, "reasoning": "2-3 sentences why this fits the market and risk level"}')
+    content=_call_provider(provider,key,None,"You are a quantitative crypto strategy designer. Reply with strict raw JSON only — no markdown, no extra text.",[{"role":"user","content":prompt}])
+    try:
+        start=content.find("{"); end=content.rfind("}")
+        cfg=json.loads(content[start:end+1])
+    except Exception:
+        raise HTTPException(400,f"AI returned an unparseable response — try again. Raw: {content[:200]}")
+    def clamp(v,lo,hi,d):
+        try: return max(lo,min(hi,float(v)))
+        except: return d
+    cfg["strategy"]=str(cfg.get("strategy","EMA")).upper()
+    if cfg["strategy"] not in ("EMA","MACD","BB","RSI_REV","GOLDEN","SUPER"): cfg["strategy"]="EMA"
+    cfg["sl_pct"]=clamp(cfg.get("sl_pct"),0.3,20,1.5)
+    cfg["tp1_pct"]=clamp(cfg.get("tp1_pct"),0.5,50,3.0)
+    cfg["tp2_pct"]=clamp(cfg.get("tp2_pct"),cfg["tp1_pct"],100,max(6.0,cfg["tp1_pct"]*2))
+    cfg["capital_usdt"]=clamp(cfg.get("capital_usdt"),10,100000,100)
+    cfg["trailing_enabled"]=bool(cfg.get("trailing_enabled",True))
+    if not isinstance(cfg.get("params"),dict): cfg["params"]={}
+    cfg["name"]=str(cfg.get("name") or f"AI {cfg['strategy']} Bot")[:40]
+    cfg["reasoning"]=str(cfg.get("reasoning",""))[:600]
+    cfg["pair"]=req.pair; cfg["timeframe"]=req.timeframe
+    return {"config":cfg,"provider":provider,"label":PROVIDER_LABELS.get(provider,provider)}
 
 # ── BOT ───────────────────────────────────────────────────────────────────────
 class BotUpdate(BaseModel):

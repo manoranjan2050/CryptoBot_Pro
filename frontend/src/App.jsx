@@ -893,6 +893,16 @@ const STRATEGIES = [
 ];
 const RISK_COLOR = {Low:"text-green-400 bg-green-500/10 border-green-500/20",Medium:"text-amber-400 bg-amber-500/10 border-amber-500/20",High:"text-red-400 bg-red-500/10 border-red-500/20"};
 
+// Pre-defined advised bot templates — one-click create or backtest
+const BOT_TEMPLATES = [
+  {name:"Safe Starter",strategy:"RSI_REV",pair:"BTCUSDT",timeframe:"1h",params:{oversold:30,overbought:70},capital_usdt:100,sl_pct:1.0,tp1_pct:2.0,tp2_pct:4.0,trailing_enabled:true,risk:"Low",desc:"RSI dip-buying on BTC. Small targets, tight stop — the best first bot."},
+  {name:"Trend Rider",strategy:"EMA",pair:"BTCUSDT",timeframe:"4h",params:{ema_fast:21,ema_slow:55},capital_usdt:150,sl_pct:2.0,tp1_pct:4.0,tp2_pct:8.0,trailing_enabled:true,risk:"Low",desc:"Classic EMA 21/55 crossover on 4h — rides medium-term trends."},
+  {name:"Golden Cross HODL",strategy:"GOLDEN",pair:"BTCUSDT",timeframe:"1d",params:{},capital_usdt:200,sl_pct:3.0,tp1_pct:6.0,tp2_pct:15.0,trailing_enabled:true,risk:"Low",desc:"Daily SMA 50/200 cross. Very few trades, big moves when they come."},
+  {name:"Range Trader",strategy:"BB",pair:"ETHUSDT",timeframe:"1h",params:{bb_period:20,bb_std:2},capital_usdt:100,sl_pct:1.5,tp1_pct:2.5,tp2_pct:5.0,trailing_enabled:false,risk:"Medium",desc:"Buys ETH at the lower Bollinger band — works in sideways markets."},
+  {name:"MACD Momentum",strategy:"MACD",pair:"ETHUSDT",timeframe:"4h",params:{},capital_usdt:120,sl_pct:2.0,tp1_pct:4.0,tp2_pct:7.0,trailing_enabled:true,risk:"Medium",desc:"MACD signal cross with RSI filter — catches momentum swings."},
+  {name:"Breakout Hunter",strategy:"SUPER",pair:"SOLUSDT",timeframe:"1h",params:{st_period:10,st_mult:3},capital_usdt:100,sl_pct:2.5,tp1_pct:5.0,tp2_pct:10.0,trailing_enabled:true,risk:"Medium",desc:"Supertrend flips on SOL — built for strong breakout moves."},
+];
+
 const BotManagerPage = ({ token, mode }) => {
   const [bots,setBots]=useState([]);
   const [showCreate,setShowCreate]=useState(false);
@@ -901,9 +911,47 @@ const BotManagerPage = ({ token, mode }) => {
   const [saving,setSaving]=useState(false);
   const [togglingId,setTogglingId]=useState(null);
   const [signalMap,setSignalMap]=useState({});
+  // Backtest modal
+  const today=new Date().toISOString().split("T")[0];
+  const sixMonthsAgo=new Date(Date.now()-180*86400*1000).toISOString().split("T")[0];
+  const [btTarget,setBtTarget]=useState(null);   // config under test
+  const [btForm,setBtForm]=useState({start:sixMonthsAgo,end:today,initial:10000,amount:500});
+  const [btResult,setBtResult]=useState(null);
+  const [btLoading,setBtLoading]=useState(false);
+  const [btError,setBtError]=useState(null);
+  // AI strategy modal
+  const [aiOpen,setAiOpen]=useState(false);
+  const [aiForm,setAiForm]=useState({pair:"BTCUSDT",timeframe:"1h",risk:"medium",goal:""});
+  const [aiLoading,setAiLoading]=useState(false);
+  const [aiResult,setAiResult]=useState(null);
+  const [aiError,setAiError]=useState(null);
 
   const load=()=>api("/api/bots",{},token).then(b=>setBots(Array.isArray(b)?b:[]));
   useEffect(()=>{load();const t=setInterval(load,30000);return()=>clearInterval(t);},[token]);
+
+  const openBacktest=(cfg)=>{ setBtTarget(cfg); setBtResult(null); setBtError(null); };
+  const runBt=async()=>{
+    setBtLoading(true); setBtError(null); setBtResult(null);
+    const body={symbol:btTarget.pair,interval:btTarget.timeframe,start_date:btForm.start,end_date:btForm.end,
+      strategy:btTarget.strategy,params:typeof btTarget.params==="string"?btTarget.params:JSON.stringify(btTarget.params||{}),
+      initial_balance:parseFloat(btForm.initial)||10000,trade_amount:parseFloat(btForm.amount)||500,
+      sl_pct:btTarget.sl_pct||1.5,tp1_pct:btTarget.tp1_pct||3.0,tp2_pct:btTarget.tp2_pct||6.0,
+      trailing_enabled:!!btTarget.trailing_enabled};
+    const res=await api("/api/backtest/advanced",{method:"POST",body:JSON.stringify(body)},token);
+    if(res.total_trades!==undefined) setBtResult(res); else setBtError(res.detail||"Backtest failed");
+    setBtLoading(false);
+  };
+  const aiGenerate=async()=>{
+    setAiLoading(true); setAiError(null); setAiResult(null);
+    const res=await api("/api/ai/strategy",{method:"POST",body:JSON.stringify(aiForm)},token);
+    if(res.config) setAiResult(res); else setAiError(res.detail||"AI generation failed — try again");
+    setAiLoading(false);
+  };
+  const useTemplate=(t)=>{
+    setForm({name:t.name,pair:t.pair,timeframe:t.timeframe,strategy:t.strategy,params:JSON.stringify(t.params||{}),
+      capital_usdt:t.capital_usdt,sl_pct:t.sl_pct,tp1_pct:t.tp1_pct,tp2_pct:t.tp2_pct,trailing_enabled:!!t.trailing_enabled});
+    setEditBot(null); setShowCreate(true);
+  };
 
   const openCreate=()=>{ setForm({name:"",pair:"BTCUSDT",timeframe:"1h",strategy:"EMA",params:"{}",capital_usdt:100,sl_pct:1.5,tp1_pct:3.0,tp2_pct:6.0,trailing_enabled:true}); setEditBot(null); setShowCreate(true); };
   const openEdit=b=>{ setForm({name:b.name,pair:b.pair,timeframe:b.timeframe,strategy:b.strategy,params:b.params||"{}",capital_usdt:b.capital_usdt,sl_pct:b.sl_pct,tp1_pct:b.tp1_pct,tp2_pct:b.tp2_pct,trailing_enabled:!!b.trailing_enabled}); setEditBot(b); setShowCreate(true); };
@@ -940,9 +988,46 @@ const BotManagerPage = ({ token, mode }) => {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div><h1 className="text-white text-2xl font-bold">Bot Manager</h1><p className="text-slate-500 text-sm mt-0.5">Multiple automated trading bots · each with its own strategy & capital</p></div>
-        <button onClick={openCreate} className="flex items-center gap-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white font-semibold px-5 py-2.5 rounded-xl text-sm">
-          + Create Bot
-        </button>
+        <div className="flex gap-2">
+          <button onClick={()=>{setAiOpen(true);setAiResult(null);setAiError(null);}} className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-violet-500/40 text-violet-300 font-semibold px-4 py-2.5 rounded-xl text-sm transition-colors">
+            ✨ AI Strategy
+          </button>
+          <button onClick={openCreate} className="flex items-center gap-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white font-semibold px-5 py-2.5 rounded-xl text-sm">
+            + Create Bot
+          </button>
+        </div>
+      </div>
+
+      {/* Advised bot templates */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-white font-semibold">⭐ Recommended Bots</h3>
+          <span className="text-slate-500 text-xs">Pre-configured · backtest before you deploy</span>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
+          {BOT_TEMPLATES.map(t=>(
+            <div key={t.name} className="bg-slate-800 rounded-xl p-3.5 border border-slate-700 hover:border-slate-600 transition-colors">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-white text-sm font-bold">{t.name}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full border ${RISK_COLOR[t.risk]}`}>{t.risk}</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-slate-500 mb-1.5">
+                <span className="text-cyan-400 font-semibold">{(STRATEGIES.find(s=>s.id===t.strategy)||{}).name||t.strategy}</span>
+                <span>·</span><span>{t.pair.replace("USDT","")} {t.timeframe}</span>
+              </div>
+              <p className="text-slate-400 text-xs leading-relaxed mb-2.5">{t.desc}</p>
+              <div className="flex items-center gap-2 text-xs text-slate-500 mb-3">
+                <span className="text-red-400">SL {t.sl_pct}%</span><span>·</span>
+                <span className="text-green-400">TP {t.tp1_pct}/{t.tp2_pct}%</span>
+                {t.trailing_enabled&&<><span>·</span><span className="text-violet-400">Trail</span></>}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={()=>openBacktest({...t,label:t.name})} className="flex-1 text-xs py-2 bg-slate-900 hover:bg-cyan-500/10 text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-500/30 rounded-lg font-semibold transition-all">📊 Backtest</button>
+                <button onClick={()=>useTemplate(t)} className="flex-1 text-xs py-2 bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-400 border border-cyan-500/25 rounded-lg font-bold transition-all">+ Use</button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Strategy Guide */}
@@ -990,6 +1075,8 @@ const BotManagerPage = ({ token, mode }) => {
                   </div>
                   <div className="flex gap-1.5">
                     <button onClick={()=>fetchSignal(b)} title="Get signal" className="text-xs p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-cyan-400 border border-slate-700 rounded-lg transition-colors">⚡</button>
+                    <button onClick={()=>openBacktest({label:b.name,strategy:b.strategy,params:b.params||"{}",pair:b.pair,timeframe:b.timeframe,sl_pct:b.sl_pct,tp1_pct:b.tp1_pct,tp2_pct:b.tp2_pct,trailing_enabled:!!b.trailing_enabled})}
+                      title="Backtest this bot" className="text-xs p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-green-400 border border-slate-700 rounded-lg transition-colors">📊</button>
                     <button onClick={()=>openEdit(b)} className="text-xs px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700 rounded-lg transition-colors">Edit</button>
                     <button onClick={()=>deleteBot(b)} className="text-xs px-2.5 py-1.5 bg-slate-800 hover:bg-red-500/10 text-slate-500 hover:text-red-400 border border-slate-700 hover:border-red-500/30 rounded-lg transition-colors">Del</button>
                   </div>
@@ -1029,6 +1116,112 @@ const BotManagerPage = ({ token, mode }) => {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Backtest Modal */}
+      {btTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-2xl w-full shadow-2xl my-4">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-white font-bold text-lg">📊 Backtest — {btTarget.label||btTarget.strategy}</h3>
+                <p className="text-slate-400 text-sm mt-0.5">{(STRATEGIES.find(s=>s.id===btTarget.strategy)||{}).name||btTarget.strategy} · {btTarget.pair} · {btTarget.timeframe} · SL {btTarget.sl_pct}% · TP {btTarget.tp1_pct}/{btTarget.tp2_pct}%{btTarget.trailing_enabled?" · Trailing":""}</p>
+              </div>
+              <button onClick={()=>setBtTarget(null)} className="text-slate-500 hover:text-white w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-800 text-lg">✕</button>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 mb-4">
+              <div><label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1 block">Start</label>
+                <input type="date" style={{colorScheme:"dark"}} value={btForm.start} onChange={e=>setBtForm(f=>({...f,start:e.target.value}))} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-white text-xs focus:outline-none focus:border-cyan-500"/></div>
+              <div><label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1 block">End</label>
+                <input type="date" style={{colorScheme:"dark"}} value={btForm.end} onChange={e=>setBtForm(f=>({...f,end:e.target.value}))} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-white text-xs focus:outline-none focus:border-cyan-500"/></div>
+              <div><label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1 block">Balance</label>
+                <input type="number" value={btForm.initial} onChange={e=>setBtForm(f=>({...f,initial:e.target.value}))} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-white text-xs focus:outline-none focus:border-cyan-500"/></div>
+              <div><label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1 block">Per Trade</label>
+                <input type="number" value={btForm.amount} onChange={e=>setBtForm(f=>({...f,amount:e.target.value}))} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-white text-xs focus:outline-none focus:border-cyan-500"/></div>
+            </div>
+            <button onClick={runBt} disabled={btLoading}
+              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white font-bold py-2.5 rounded-xl text-sm transition-all disabled:opacity-50 mb-4">
+              {btLoading?<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>Running on Binance history…</>:"▶ Run Backtest"}
+            </button>
+            {btError&&<div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-red-400 text-sm mb-3">{btError}</div>}
+            {btResult&&(
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 lg:grid-cols-6 gap-2 text-center text-xs">
+                  {[
+                    {l:"Return",v:`${btResult.total_return_pct>=0?"+":""}${btResult.total_return_pct}%`,c:btResult.total_return_pct>=0?"text-green-400":"text-red-400"},
+                    {l:"PnL",v:`${btResult.total_pnl>=0?"+":""}$${btResult.total_pnl}`,c:btResult.total_pnl>=0?"text-green-400":"text-red-400"},
+                    {l:"Trades",v:btResult.total_trades,c:"text-white"},
+                    {l:"Win Rate",v:`${btResult.win_rate}%`,c:btResult.win_rate>=50?"text-green-400":"text-amber-400"},
+                    {l:"Max DD",v:`-${btResult.max_drawdown_pct}%`,c:btResult.max_drawdown_pct>15?"text-red-400":"text-amber-400"},
+                    {l:"Profit Factor",v:`${btResult.profit_factor}x`,c:btResult.profit_factor>=1.5?"text-green-400":"text-slate-300"},
+                  ].map(r=><div key={r.l} className="bg-slate-800 rounded-lg p-2.5"><div className={`font-bold text-sm ${r.c}`}>{r.v}</div><div className="text-slate-500 mt-0.5">{r.l}</div></div>)}
+                </div>
+                <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                  {[
+                    {l:"TP1 hits",v:btResult.tp1_hits,c:"text-green-400"},
+                    {l:"TP2 hits",v:btResult.tp2_hits,c:"text-cyan-400"},
+                    {l:"Stop hits",v:btResult.sl_hits,c:"text-red-400"},
+                    {l:"Avg hold",v:`${btResult.avg_hold_candles} candles`,c:"text-slate-300"},
+                  ].map(r=><div key={r.l} className="bg-slate-800 rounded-lg p-2"><div className={`font-bold ${r.c}`}>{r.v}</div><div className="text-slate-500 mt-0.5">{r.l}</div></div>)}
+                </div>
+                <div className="bg-slate-800 rounded-xl p-3">
+                  <div className="text-slate-400 text-xs mb-2">Equity Curve · {btResult.start_date} → {btResult.end_date} · {btResult.candles_used.toLocaleString()} candles</div>
+                  <div className="h-36"><EquityChart data={btResult.equity_curve} initial={btResult.initial_balance}/></div>
+                </div>
+                {btResult.total_trades===0&&<p className="text-amber-400 text-xs text-center">No trades triggered in this period — try a wider date range or different timeframe.</p>}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* AI Strategy Modal */}
+      {aiOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-violet-500/30 rounded-2xl p-6 max-w-lg w-full shadow-2xl my-4">
+            <div className="flex items-center justify-between mb-4">
+              <div><h3 className="text-white font-bold text-lg">✨ AI Strategy Designer</h3><p className="text-slate-400 text-sm mt-0.5">Your AI advisor designs a bot config for current market conditions</p></div>
+              <button onClick={()=>setAiOpen(false)} className="text-slate-500 hover:text-white w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-800 text-lg">✕</button>
+            </div>
+            <div className="grid grid-cols-3 gap-2.5 mb-3">
+              <Select label="Pair" value={aiForm.pair} onChange={v=>setAiForm(f=>({...f,pair:v}))} options={["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT"].map(p=>({value:p,label:p.replace("USDT","")}))}/>
+              <Select label="Timeframe" value={aiForm.timeframe} onChange={v=>setAiForm(f=>({...f,timeframe:v}))} options={[{value:"15m",label:"15m"},{value:"1h",label:"1h"},{value:"4h",label:"4h"},{value:"1d",label:"1d"}]}/>
+              <Select label="Risk" value={aiForm.risk} onChange={v=>setAiForm(f=>({...f,risk:v}))} options={[{value:"low",label:"Low"},{value:"medium",label:"Medium"},{value:"high",label:"High"}]}/>
+            </div>
+            <Input label="Goal (optional)" value={aiForm.goal} onChange={v=>setAiForm(f=>({...f,goal:v}))} placeholder="e.g. steady daily gains, avoid big drawdowns"/>
+            <button onClick={aiGenerate} disabled={aiLoading}
+              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-400 hover:to-fuchsia-400 text-white font-bold py-2.5 rounded-xl text-sm transition-all disabled:opacity-50 mt-3 mb-3">
+              {aiLoading?<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>Asking your AI…</>:"✨ Generate Strategy"}
+            </button>
+            {aiError&&<div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-red-400 text-sm mb-3">{aiError}</div>}
+            {aiResult&&(
+              <div className="space-y-3">
+                <div className="bg-slate-800 border border-violet-500/20 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-white font-bold">{aiResult.config.name}</span>
+                    <span className="text-xs text-slate-500">by {aiResult.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs flex-wrap mb-2">
+                    <span className="text-cyan-400 font-semibold">{(STRATEGIES.find(s=>s.id===aiResult.config.strategy)||{}).name||aiResult.config.strategy}</span>
+                    <span className="text-slate-600">·</span><span className="text-slate-400">{aiResult.config.pair} {aiResult.config.timeframe}</span>
+                    <span className="text-slate-600">·</span><span className="text-red-400">SL {aiResult.config.sl_pct}%</span>
+                    <span className="text-slate-600">·</span><span className="text-green-400">TP {aiResult.config.tp1_pct}/{aiResult.config.tp2_pct}%</span>
+                    {aiResult.config.trailing_enabled&&<><span className="text-slate-600">·</span><span className="text-violet-400">Trailing</span></>}
+                    <span className="text-slate-600">·</span><span className="text-amber-400">${aiResult.config.capital_usdt}</span>
+                  </div>
+                  {Object.keys(aiResult.config.params||{}).length>0&&<div className="text-xs text-slate-500 font-mono mb-2">{JSON.stringify(aiResult.config.params)}</div>}
+                  <p className="text-slate-300 text-xs leading-relaxed">{aiResult.config.reasoning}</p>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>{const c=aiResult.config; setAiOpen(false); openBacktest({...c,label:c.name});}}
+                    className="flex-1 text-sm py-2.5 bg-slate-800 hover:bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 rounded-xl font-bold transition-all">📊 Backtest It</button>
+                  <button onClick={()=>{const c=aiResult.config; setForm({name:c.name,pair:c.pair,timeframe:c.timeframe,strategy:c.strategy,params:JSON.stringify(c.params||{}),capital_usdt:c.capital_usdt,sl_pct:c.sl_pct,tp1_pct:c.tp1_pct,tp2_pct:c.tp2_pct,trailing_enabled:!!c.trailing_enabled}); setEditBot(null); setAiOpen(false); setShowCreate(true);}}
+                    className="flex-1 text-sm py-2.5 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white rounded-xl font-bold transition-all">+ Create Bot</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1789,15 +1982,37 @@ const BacktestPage = ({ token }) => {
   const today=new Date().toISOString().split("T")[0];
   const sixMonthsAgo=new Date(Date.now()-180*86400*1000).toISOString().split("T")[0];
   const [cfg,setCfg]=useState({symbol:"BTCUSDT",interval:"1h",start_date:sixMonthsAgo,end_date:today,
-    initial_balance:10000,trade_amount:500,ema_fast:21,ema_slow:55,rsi_period:14,
-    rsi_buy_min:45,rsi_buy_max:65,stop_loss_pct:1.5,take_profit_pct:3.0});
+    initial_balance:10000,trade_amount:500,strategy:"EMA",ema_fast:21,ema_slow:55,
+    bb_period:20,bb_std:2,oversold:30,overbought:70,st_period:10,st_mult:3,
+    stop_loss_pct:1.5,take_profit_pct:3.0,tp2_pct:6.0,trailing_enabled:true});
   const [results,setResults]=useState(null);
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState(null);
+  const [myBots,setMyBots]=useState([]);
+  useEffect(()=>{ api("/api/bots",{},token).then(b=>setMyBots(Array.isArray(b)?b:[])); },[token]);
+
+  const loadFromBot=(id)=>{
+    const b=myBots.find(x=>String(x.id)===String(id));
+    if(!b) return;
+    let p={}; try{p=JSON.parse(b.params||"{}");}catch{}
+    setCfg(c=>({...c,symbol:b.pair,interval:b.timeframe,strategy:b.strategy,
+      ema_fast:p.ema_fast||21,ema_slow:p.ema_slow||55,bb_period:p.bb_period||20,bb_std:p.bb_std||2,
+      oversold:p.oversold||30,overbought:p.overbought||70,st_period:p.st_period||10,st_mult:p.st_mult||3,
+      stop_loss_pct:b.sl_pct,take_profit_pct:b.tp1_pct,tp2_pct:b.tp2_pct,trailing_enabled:!!b.trailing_enabled}));
+  };
 
   const runBacktest=async()=>{
     setLoading(true); setError(null); setResults(null);
-    const res=await api("/api/backtest",{method:"POST",body:JSON.stringify(cfg)},token);
+    const params={};
+    if(cfg.strategy==="EMA"){ params.ema_fast=cfg.ema_fast; params.ema_slow=cfg.ema_slow; }
+    if(cfg.strategy==="BB"){ params.bb_period=cfg.bb_period; params.bb_std=cfg.bb_std; }
+    if(cfg.strategy==="RSI_REV"){ params.oversold=cfg.oversold; params.overbought=cfg.overbought; }
+    if(cfg.strategy==="SUPER"){ params.st_period=cfg.st_period; params.st_mult=cfg.st_mult; }
+    const body={symbol:cfg.symbol,interval:cfg.interval,start_date:cfg.start_date,end_date:cfg.end_date,
+      initial_balance:cfg.initial_balance,trade_amount:cfg.trade_amount,
+      strategy:cfg.strategy,params:JSON.stringify(params),
+      sl_pct:cfg.stop_loss_pct,tp1_pct:cfg.take_profit_pct,tp2_pct:cfg.tp2_pct,trailing_enabled:!!cfg.trailing_enabled};
+    const res=await api("/api/backtest/advanced",{method:"POST",body:JSON.stringify(body)},token);
     if(res.total_trades!==undefined) setResults(res);
     else setError(res.detail||"Backtest failed");
     setLoading(false);
@@ -1821,7 +2036,19 @@ const BacktestPage = ({ token }) => {
         {/* Config panel */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
           <h3 className="text-white font-semibold">Configuration</h3>
-          <Select label="Symbol" value={cfg.symbol} onChange={v=>setCfg(c=>({...c,symbol:v}))} options={["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT"].map(s=>({value:s,label:s.replace("USDT","/USDT")}))}/>
+          {myBots.length>0&&(
+            <div>
+              <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Load From My Bots</label>
+              <select defaultValue="" onChange={e=>loadFromBot(e.target.value)}
+                className="w-full bg-slate-800 border border-violet-500/30 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-violet-500">
+                <option value="">— pick a bot to prefill —</option>
+                {myBots.map(b=><option key={b.id} value={b.id}>{b.name} ({b.strategy} · {b.pair} {b.timeframe})</option>)}
+              </select>
+            </div>
+          )}
+          <Select label="Strategy" value={cfg.strategy} onChange={v=>setCfg(c=>({...c,strategy:v}))}
+            options={[{value:"EMA",label:"EMA Crossover"},{value:"MACD",label:"MACD + RSI"},{value:"BB",label:"Bollinger Bands"},{value:"RSI_REV",label:"RSI Reversal"},{value:"GOLDEN",label:"Golden Cross"},{value:"SUPER",label:"Supertrend"}]}/>
+          <Select label="Symbol" value={cfg.symbol} onChange={v=>setCfg(c=>({...c,symbol:v}))} options={["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT"].map(s=>({value:s,label:s.replace("USDT","/USDT")}))}/>
           <Select label="Candle Interval" value={cfg.interval} onChange={v=>setCfg(c=>({...c,interval:v}))} options={[{value:"15m",label:"15 Minutes"},{value:"1h",label:"1 Hour (recommended)"},{value:"4h",label:"4 Hours"},{value:"1d",label:"1 Day"}]}/>
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -1840,14 +2067,34 @@ const BacktestPage = ({ token }) => {
           <div className="border-t border-slate-700 pt-4">
             <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">Strategy Parameters</p>
             <div className="grid grid-cols-2 gap-2">
-              <Input label="EMA Fast" type="number" value={cfg.ema_fast} onChange={v=>setCfg(c=>({...c,ema_fast:v}))}/>
-              <Input label="EMA Slow" type="number" value={cfg.ema_slow} onChange={v=>setCfg(c=>({...c,ema_slow:v}))}/>
-              <Input label="RSI Period" type="number" value={cfg.rsi_period} onChange={v=>setCfg(c=>({...c,rsi_period:v}))}/>
-              <Input label="RSI Buy Min" type="number" value={cfg.rsi_buy_min} onChange={v=>setCfg(c=>({...c,rsi_buy_min:v}))}/>
-              <Input label="RSI Buy Max" type="number" value={cfg.rsi_buy_max} onChange={v=>setCfg(c=>({...c,rsi_buy_max:v}))}/>
-              <div/>
+              {cfg.strategy==="EMA"&&<>
+                <Input label="EMA Fast" type="number" value={cfg.ema_fast} onChange={v=>setCfg(c=>({...c,ema_fast:v}))}/>
+                <Input label="EMA Slow" type="number" value={cfg.ema_slow} onChange={v=>setCfg(c=>({...c,ema_slow:v}))}/>
+              </>}
+              {cfg.strategy==="BB"&&<>
+                <Input label="BB Period" type="number" value={cfg.bb_period} onChange={v=>setCfg(c=>({...c,bb_period:v}))}/>
+                <Input label="BB Std Dev" type="number" value={cfg.bb_std} onChange={v=>setCfg(c=>({...c,bb_std:v}))}/>
+              </>}
+              {cfg.strategy==="RSI_REV"&&<>
+                <Input label="Oversold (buy below)" type="number" value={cfg.oversold} onChange={v=>setCfg(c=>({...c,oversold:v}))}/>
+                <Input label="Overbought (sell above)" type="number" value={cfg.overbought} onChange={v=>setCfg(c=>({...c,overbought:v}))}/>
+              </>}
+              {cfg.strategy==="SUPER"&&<>
+                <Input label="ATR Period" type="number" value={cfg.st_period} onChange={v=>setCfg(c=>({...c,st_period:v}))}/>
+                <Input label="ATR Multiplier" type="number" value={cfg.st_mult} onChange={v=>setCfg(c=>({...c,st_mult:v}))}/>
+              </>}
+              {(cfg.strategy==="MACD"||cfg.strategy==="GOLDEN")&&(
+                <p className="text-slate-500 text-xs col-span-2">{cfg.strategy==="MACD"?"MACD 12/26/9 with RSI filter — no extra parameters.":"SMA 50/200 crossover — no extra parameters. Needs a long date range on small intervals."}</p>
+              )}
               <Input label="Stop Loss %" type="number" value={cfg.stop_loss_pct} onChange={v=>setCfg(c=>({...c,stop_loss_pct:v}))}/>
-              <Input label="Take Profit %" type="number" value={cfg.take_profit_pct} onChange={v=>setCfg(c=>({...c,take_profit_pct:v}))}/>
+              <Input label="TP1 % (book 50%)" type="number" value={cfg.take_profit_pct} onChange={v=>setCfg(c=>({...c,take_profit_pct:v}))}/>
+              <Input label="TP2 % (close rest)" type="number" value={cfg.tp2_pct} onChange={v=>setCfg(c=>({...c,tp2_pct:v}))}/>
+              <div className="flex items-end pb-1">
+                <div className="flex items-center justify-between w-full bg-slate-800 rounded-lg px-3 py-2">
+                  <span className="text-slate-300 text-xs font-medium">Trailing Stop</span>
+                  <Toggle value={!!cfg.trailing_enabled} onChange={v=>setCfg(c=>({...c,trailing_enabled:v}))}/>
+                </div>
+              </div>
             </div>
           </div>
           {error&&<div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-red-400 text-sm flex items-start gap-2"><Icon name="warning" size={14} className="flex-shrink-0 mt-0.5"/>{error}</div>}
