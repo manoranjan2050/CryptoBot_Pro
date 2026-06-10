@@ -803,6 +803,9 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
   const [pwForm,setPwForm]=useState({current:"",new_password:"",confirm:""});
   const [profileMsg,setProfileMsg]=useState(null);
   const [profileSaving,setProfileSaving]=useState(false);
+  const [apiTest,setApiTest]=useState(null);
+  const [apiTesting,setApiTesting]=useState(false);
+  const [showFuturesGuide,setShowFuturesGuide]=useState(false);
 
   useEffect(()=>{
     api("/api/settings",{},token).then(s=>setSettings(s||{}));
@@ -831,6 +834,14 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
 
   const doSave = async(endpoint,data,key)=>{ setSaving(true); await api(endpoint,{method:"PUT",body:JSON.stringify(data)},token); setSaved(key); setSaving(false); setTimeout(()=>setSaved(""),2500); };
   const doTest = async type=>{ setTestStatus(t=>({...t,[type]:"testing"})); try{ await api(`/api/notify/test-${type}`,{method:"POST"},token); setTestStatus(t=>({...t,[type]:"ok"})); }catch{ setTestStatus(t=>({...t,[type]:"error"})); } setTimeout(()=>setTestStatus(t=>({...t,[type]:null})),3000); };
+  const testBinanceApi = async()=>{
+    setApiTesting(true); setApiTest(null);
+    const r=await api("/api/settings/test-binance",{method:"POST"},token);
+    if(!r||!r.status) setApiTest({_ok:false,_err:"Cannot reach backend — is the server running on port 8000?"});
+    else if(r.detail) setApiTest({_ok:false,_err:typeof r.detail==="string"?r.detail:r.detail[0]?.msg||"Error"});
+    else setApiTest({...r,_ok:true});
+    setApiTesting(false);
+  };
   const resetDemo = async()=>{ if(!window.confirm(`Reset demo to $${(funds.demo_initial||10000).toLocaleString()}?`)) return; const res=await api("/api/funds/reset-demo",{method:"POST"},token); if(res.balance) setFunds(f=>({...f,demo_balance:res.balance})); };
 
   const demoGrowth = funds.demo_initial&&funds.demo_balance?(((funds.demo_balance-funds.demo_initial)/funds.demo_initial)*100).toFixed(1):null;
@@ -947,19 +958,7 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
         </>}
 
         {/* ── BINANCE API TAB ── */}
-        {tab==="api" && (()=>{
-          const [apiTest,setApiTest]=React.useState(null);
-          const [apiTesting,setApiTesting]=React.useState(false);
-          const [showFuturesGuide,setShowFuturesGuide]=React.useState(false);
-          const testApi=async()=>{
-            setApiTesting(true); setApiTest(null);
-            const r=await api("/api/settings/test-binance",{method:"POST"},token);
-            if(!r||!r.status) setApiTest({_ok:false,_err:"Cannot reach backend — is the server running on port 8000?"});
-            else if(r.detail) setApiTest({_ok:false,_err:typeof r.detail==="string"?r.detail:r.detail[0]?.msg||"Error"});
-            else setApiTest({...r,_ok:true});
-            setApiTesting(false);
-          };
-          return(<>
+        {tab==="api" && <>
             <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
               <Icon name="warning" size={16} className="text-amber-400 flex-shrink-0 mt-0.5"/>
               <p className="text-amber-300 text-sm">Enable <strong>Spot & Margin Trading only</strong>. Never enable withdrawal permissions on bot keys. For Futures — see the guide below.</p>
@@ -970,7 +969,7 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
 
             {/* Test connection button */}
             <div className="border-t border-slate-700 pt-4">
-              <button onClick={testApi} disabled={apiTesting}
+              <button onClick={testBinanceApi} disabled={apiTesting}
                 className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-xl text-sm font-semibold text-white transition-colors">
                 {apiTesting ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>Testing…</> : <><Icon name="chart" size={14}/>Test API Connection</>}
               </button>
@@ -1057,17 +1056,26 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
                 </div>
               </div>}
             </div>
-          </>);
-        })()}
+        </>}
 
         {/* ── AI ADVISOR TAB ── */}
         {tab==="ai" && <>
           <div className="flex items-start gap-3 p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-xl">
             <Icon name="chat" size={16} className="text-cyan-400 flex-shrink-0 mt-0.5"/>
-            <p className="text-slate-300 text-sm">The AI Advisor uses Claude (Anthropic). Add your API key here — get one free at <span className="text-cyan-400 font-medium">console.anthropic.com</span>. Your key is stored securely on the backend.</p>
+            <p className="text-slate-300 text-sm">The AI Advisor uses Claude (Anthropic). Get an API key at <span className="text-cyan-400 font-medium">console.anthropic.com</span>. Your key is stored securely on the backend and never exposed in the browser.</p>
           </div>
           <Input label="Anthropic API Key" type="password" value={settings.anthropic_api_key?.startsWith("sk-ant")?"":settings.anthropic_api_key||""} onChange={v=>setSettings(s=>({...s,anthropic_api_key:v}))} placeholder="sk-ant-api03-…"/>
           <SaveBtn dataKey="settings"/>
+          <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 text-xs space-y-2">
+            <p className="text-amber-300 font-semibold">Getting "credit balance too low" in AI chat?</p>
+            <p className="text-amber-300/80">The free tier has no ongoing credits. You need to purchase API credits to use Claude:</p>
+            <div className="space-y-1 text-amber-300/70">
+              <p>1. Go to <strong className="text-amber-300">console.anthropic.com → Settings → Billing</strong></p>
+              <p>2. Click <strong className="text-amber-300">Add Credits</strong> — minimum $5</p>
+              <p>3. Your existing API key will start working immediately after purchase</p>
+              <p>4. The AI Advisor uses <strong>claude-haiku</strong> — very cost-efficient (~$0.001 per message)</p>
+            </div>
+          </div>
         </>}
 
         {/* ── TELEGRAM TAB ── */}
@@ -1194,7 +1202,12 @@ const ChatPage = ({ token, user, mode }) => {
     try {
       const apiMsgs=messages.concat([{role:"user",content:userMsg}]).filter((m,i)=>m.role!=="assistant"||i>0).map(m=>({role:m.role,content:m.content}));
       const data=await api("/api/chat",{method:"POST",body:JSON.stringify({messages:apiMsgs,mode})},token);
-      setMessages(m=>[...m,{role:"assistant",content:data.content||data.detail||"Sorry, couldn't process that."}]);
+      const errMsg=data.detail||"";
+      if(errMsg.includes("credit balance")||errMsg.includes("Plans & Billing")){
+        setMessages(m=>[...m,{role:"assistant",content:"__CREDIT_ERROR__"}]);
+      } else {
+        setMessages(m=>[...m,{role:"assistant",content:data.content||errMsg||"Sorry, couldn't process that."}]);
+      }
     } catch { setMessages(m=>[...m,{role:"assistant",content:"Connection error. Check your Anthropic API key in Settings → AI Advisor."}]); }
     setLoading(false);
   };
@@ -1207,7 +1220,22 @@ const ChatPage = ({ token, user, mode }) => {
           {messages.map((m,i)=>(
             <div key={i} className={`flex gap-3 ${m.role==="user"?"justify-end":"justify-start"}`}>
               {m.role==="assistant"&&<div className="w-8 h-8 bg-gradient-to-br from-cyan-400 to-violet-500 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 mt-1">₿</div>}
-              <div className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${m.role==="user"?"bg-gradient-to-r from-cyan-500 to-violet-500 text-white rounded-tr-sm":"bg-slate-800 text-slate-200 rounded-tl-sm"}`}>{m.content}</div>
+              {m.content==="__CREDIT_ERROR__"
+                ? <div className="max-w-[80%] bg-orange-500/10 border border-orange-500/25 rounded-2xl rounded-tl-sm px-4 py-3 text-sm space-y-2">
+                    <p className="text-orange-300 font-semibold">Anthropic API — Insufficient Credits</p>
+                    <p className="text-orange-300/80 text-xs">Your API key has no credits remaining. The AI Advisor needs a paid Anthropic account to work.</p>
+                    <div className="space-y-1 text-xs text-orange-300/70">
+                      <p>1. Go to <strong className="text-orange-300">console.anthropic.com</strong></p>
+                      <p>2. Click <strong className="text-orange-300">Plans & Billing → Add Credits</strong></p>
+                      <p>3. Purchase credits (starts at $5), then retry here</p>
+                    </div>
+                    <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener noreferrer"
+                      className="inline-block mt-1 px-3 py-1.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 rounded-lg text-xs font-medium transition-colors">
+                      Open Anthropic Billing →
+                    </a>
+                  </div>
+                : <div className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${m.role==="user"?"bg-gradient-to-r from-cyan-500 to-violet-500 text-white rounded-tr-sm":"bg-slate-800 text-slate-200 rounded-tl-sm"}`}>{m.content}</div>
+              }
               {m.role==="user"&&<div className="w-8 h-8 bg-slate-700 rounded-full flex items-center justify-center text-xs font-bold text-slate-300 flex-shrink-0 mt-1">{user?.username?.charAt(0)?.toUpperCase()}</div>}
             </div>
           ))}
