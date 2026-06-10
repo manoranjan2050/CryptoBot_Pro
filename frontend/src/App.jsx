@@ -362,6 +362,10 @@ const TradingPage = ({ token, mode }) => {
   const [pair,setPair]=useState("BTCUSDT");
   const [side,setSide]=useState("BUY");
   const [amount,setAmount]=useState("");
+  const [orderType,setOrderType]=useState("MARKET");
+  const [limitPrice,setLimitPrice]=useState("");
+  const [tradeSlPct,setTradeSlPct]=useState("");
+  const [tradeTpPct,setTradeTpPct]=useState("");
   const [livePrice,setLivePrice]=useState(null);
   const [liveData,setLiveData]=useState({});
   const [msg,setMsg]=useState(null);
@@ -387,10 +391,19 @@ const TradingPage = ({ token, mode }) => {
 
   const placeTrade = async () => {
     if (!amount||isNaN(parseFloat(amount))) return;
+    if ((orderType==="LIMIT"||orderType==="STOP_MARKET")&&(!limitPrice||isNaN(parseFloat(limitPrice)))){ setMsg({ok:false,text:`${orderType} order requires a price`}); return; }
     setLoading(true); setMsg(null);
-    const res = await api("/api/demo/trade",{method:"POST",body:JSON.stringify({pair,side,amount_usdt:parseFloat(amount)})},token);
-    if (res.trade_id) { setMsg({ok:true,text:`✅ ${side} ${pair} @ $${res.price?.toLocaleString()} — qty: ${res.quantity}`}); setAmount(""); load(); }
-    else setMsg({ok:false,text:res.detail||"Trade failed"});
+    const body={pair,side,amount_usdt:parseFloat(amount),order_type:orderType};
+    if(orderType==="LIMIT"||orderType==="STOP_MARKET") body.limit_price=parseFloat(limitPrice);
+    if(tradeSlPct&&parseFloat(tradeSlPct)>0) body.stop_loss_pct=parseFloat(tradeSlPct);
+    if(tradeTpPct&&parseFloat(tradeTpPct)>0) body.take_profit_pct=parseFloat(tradeTpPct);
+    const res = await api("/api/demo/trade",{method:"POST",body:JSON.stringify(body)},token);
+    if (res.trade_id) {
+      const priceStr=res.price?`@ $${res.price?.toLocaleString()}`:"(pending fill)";
+      const statusStr=res.status==="pending"?"⏳ Queued":"✅";
+      setMsg({ok:true,text:`${statusStr} ${side} ${pair} ${priceStr} — ${orderType} order`});
+      setAmount(""); setLimitPrice(""); load();
+    } else setMsg({ok:false,text:res.detail||"Trade failed"});
     setLoading(false);
   };
 
@@ -476,6 +489,25 @@ const TradingPage = ({ token, mode }) => {
             </div>
           </div>
 
+          {/* Order type */}
+          <div>
+            <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-2 block">Order Type</label>
+            <div className="grid grid-cols-4 gap-1">
+              {["MARKET","LIMIT","STOP_MARKET","OCO"].map(t=>(
+                <button key={t} onClick={()=>setOrderType(t)}
+                  className={`py-2 text-xs font-bold rounded-lg transition-all ${orderType===t?"bg-cyan-500/20 text-cyan-400 border border-cyan-500/40":"bg-slate-800 text-slate-500 border border-slate-700 hover:text-slate-300"}`}>
+                  {t==="STOP_MARKET"?"STOP":t==="OCO"?"OCO":t}
+                </button>
+              ))}
+            </div>
+            <p className="text-slate-600 text-xs mt-1.5">
+              {orderType==="MARKET"&&"Executes immediately at the current live price"}
+              {orderType==="LIMIT"&&"Fills only when market price reaches your limit price"}
+              {orderType==="STOP_MARKET"&&"Triggers a market order when price hits the stop level"}
+              {orderType==="OCO"&&"Market order with automatic Stop Loss + Take Profit"}
+            </p>
+          </div>
+
           {/* Direction */}
           <div>
             <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-2 block">Direction</label>
@@ -503,17 +535,73 @@ const TradingPage = ({ token, mode }) => {
             )}
           </div>
 
+          {/* Limit / Stop price (LIMIT and STOP_MARKET only) */}
+          {(orderType==="LIMIT"||orderType==="STOP_MARKET") && (
+            <div>
+              <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">
+                {orderType==="LIMIT"?"Limit Price (USDT)":"Stop Trigger Price (USDT)"}
+              </label>
+              <input type="number" placeholder={livePrice?`Current: $${livePrice.toLocaleString(undefined,{maximumFractionDigits:2})}`:"Enter price"} value={limitPrice} onChange={e=>setLimitPrice(e.target.value)}
+                className="w-full bg-slate-800 border border-violet-500/40 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-violet-500 transition-colors placeholder-slate-600"/>
+              {livePrice&&limitPrice&&parseFloat(limitPrice)>0&&(
+                <p className={`text-xs mt-1 ${orderType==="LIMIT"?(side==="BUY"&&parseFloat(limitPrice)<livePrice?"text-green-400":"text-amber-400"):(side==="SELL"&&parseFloat(limitPrice)<livePrice?"text-red-400":"text-cyan-400")}`}>
+                  {orderType==="LIMIT"
+                    ? side==="BUY"
+                      ? parseFloat(limitPrice)<livePrice?"Below market — will fill when price drops to $"+parseFloat(limitPrice).toLocaleString():"Above market — fills immediately (like market order)"
+                      : parseFloat(limitPrice)>livePrice?"Above market — will fill when price rises to $"+parseFloat(limitPrice).toLocaleString():"Below market — fills immediately"
+                    : `Stop trigger at $${parseFloat(limitPrice).toLocaleString(undefined,{maximumFractionDigits:2})}`
+                  }
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* SL / TP inputs */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Stop Loss %</label>
+              <div className="relative">
+                <input type="number" step="0.1" min="0.1" max="49" placeholder="e.g. 2" value={tradeSlPct} onChange={e=>setTradeSlPct(e.target.value)}
+                  className="w-full bg-slate-800 border border-red-500/30 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-red-500 transition-colors placeholder-slate-600"/>
+                {livePrice&&tradeSlPct&&parseFloat(tradeSlPct)>0&&(
+                  <p className="text-red-400 text-xs mt-1">Stop: ${(livePrice*(1-parseFloat(tradeSlPct)/100)).toFixed(2)}</p>
+                )}
+              </div>
+            </div>
+            <div>
+              <label className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1.5 block">Take Profit %</label>
+              <div className="relative">
+                <input type="number" step="0.1" min="0.1" max="199" placeholder="e.g. 4" value={tradeTpPct} onChange={e=>setTradeTpPct(e.target.value)}
+                  className="w-full bg-slate-800 border border-green-500/30 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-green-500 transition-colors placeholder-slate-600"/>
+                {livePrice&&tradeTpPct&&parseFloat(tradeTpPct)>0&&(
+                  <p className="text-green-400 text-xs mt-1">Target: ${(livePrice*(1+parseFloat(tradeTpPct)/100)).toFixed(2)}</p>
+                )}
+              </div>
+            </div>
+            <p className="text-slate-600 text-xs col-span-2 -mt-1">Leave blank to use bot config defaults (SL: {funds.max_daily_loss_pct||1.5}% · TP: 3%)</p>
+          </div>
+
           {msg && <div className={`text-sm rounded-xl px-4 py-3 leading-relaxed ${msg.ok?"bg-green-500/10 border border-green-500/20 text-green-400":"bg-red-500/10 border border-red-500/20 text-red-400"}`}>{msg.text}</div>}
 
           <button onClick={placeTrade} disabled={loading||!amount}
             className={`w-full font-bold py-3 rounded-xl text-sm transition-all disabled:opacity-40 shadow-lg ${side==="BUY"?"bg-green-500 hover:bg-green-400 text-white shadow-green-500/20":"bg-red-500 hover:bg-red-400 text-white shadow-red-500/20"}`}>
-            {loading?"Processing…":`${side==="BUY"?"▲ BUY":"▼ SELL"} ${pair} ${mode==="demo"?"(Paper)":"(REAL)"}`}
+            {loading?"Processing…":`${side==="BUY"?"▲ BUY":"▼ SELL"} ${pair} · ${orderType} ${mode==="demo"?"(Paper)":"(REAL)"}`}
           </button>
 
+          {/* Order preview */}
           {livePrice&&amount&&parseFloat(amount)>0 && (
-            <div className="bg-slate-800 rounded-xl p-3 text-xs text-slate-400 space-y-1">
-              <div className="flex justify-between"><span>Quantity</span><span className="text-white font-medium">{(parseFloat(amount)/livePrice).toFixed(6)} {pair.replace("USDT","")}</span></div>
-              <div className="flex justify-between"><span>Entry price</span><span className="text-white">${livePrice.toLocaleString(undefined,{maximumFractionDigits:2})}</span></div>
+            <div className="bg-slate-800 rounded-xl p-3 text-xs text-slate-400 space-y-1.5">
+              <div className="flex justify-between"><span>Order Type</span><span className="text-cyan-400 font-medium">{orderType}</span></div>
+              {(orderType==="MARKET"||orderType==="OCO") && <>
+                <div className="flex justify-between"><span>Est. entry</span><span className="text-white">${livePrice.toLocaleString(undefined,{maximumFractionDigits:2})}</span></div>
+                <div className="flex justify-between"><span>Quantity</span><span className="text-white font-medium">{(parseFloat(amount)/livePrice).toFixed(6)} {pair.replace("USDT","")}</span></div>
+              </>}
+              {(orderType==="LIMIT"||orderType==="STOP_MARKET")&&limitPrice&&parseFloat(limitPrice)>0 && <>
+                <div className="flex justify-between"><span>Trigger / Limit</span><span className="text-violet-400">${parseFloat(limitPrice).toLocaleString(undefined,{maximumFractionDigits:2})}</span></div>
+                <div className="flex justify-between"><span>Quantity</span><span className="text-white font-medium">{(parseFloat(amount)/parseFloat(limitPrice)).toFixed(6)} {pair.replace("USDT","")}</span></div>
+              </>}
+              {tradeSlPct&&parseFloat(tradeSlPct)>0 && <div className="flex justify-between"><span>Stop Loss</span><span className="text-red-400">{tradeSlPct}% — ${(livePrice*(1-parseFloat(tradeSlPct)/100)).toFixed(2)}</span></div>}
+              {tradeTpPct&&parseFloat(tradeTpPct)>0 && <div className="flex justify-between"><span>Take Profit</span><span className="text-green-400">{tradeTpPct}% — ${(livePrice*(1+parseFloat(tradeTpPct)/100)).toFixed(2)}</span></div>}
             </div>
           )}
         </div>
@@ -582,67 +670,62 @@ const TradingPage = ({ token, mode }) => {
             ):(
               <div className="space-y-3">
                 {openTrades.map(t=>{
+                  const isPending=t.status==="pending";
                   const pnl=t.unrealized_pnl||0; const pct=t.unrealized_pct||0;
                   const isProfit=pnl>=0;
                   return (
-                    <div key={t.id} className={`rounded-xl border p-4 transition-all ${isProfit?"border-green-500/20 bg-green-500/5":"border-red-500/20 bg-red-500/5"}`}>
+                    <div key={t.id} className={`rounded-xl border p-4 transition-all ${isPending?"border-violet-500/25 bg-violet-500/5":isProfit?"border-green-500/20 bg-green-500/5":"border-red-500/20 bg-red-500/5"}`}>
                       {/* Top row */}
                       <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2.5">
+                        <div className="flex items-center gap-2.5 flex-wrap">
                           <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${t.side==="BUY"?"bg-green-500/20 text-green-400":"bg-red-500/20 text-red-400"}`}>{t.side}</span>
                           <span className="text-white font-bold">{t.pair}</span>
-                          <span className="text-slate-500 text-xs">#{t.id}</span>
+                          {isPending
+                            ? <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 font-semibold">⏳ {t.order_type||"PENDING"}</span>
+                            : <span className="text-xs px-2 py-0.5 rounded-full bg-slate-700 text-slate-400">{t.order_type||"MARKET"}</span>
+                          }
+                          <span className="text-slate-600 text-xs">#{t.id}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
-                          <button onClick={()=>openEdit(t)} className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-cyan-500/10 text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-500/30 rounded-lg transition-all font-medium">
-                            ✏️ Edit
-                          </button>
+                          {!isPending && <button onClick={()=>openEdit(t)} className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-cyan-500/10 text-slate-400 hover:text-cyan-400 border border-slate-700 hover:border-cyan-500/30 rounded-lg transition-all font-medium">Edit</button>}
                           <button onClick={()=>closeTrade(t.id)} disabled={closingId===t.id}
                             className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-red-500/10 text-slate-400 hover:text-red-400 border border-slate-700 hover:border-red-500/30 rounded-lg transition-all font-medium disabled:opacity-50">
-                            {closingId===t.id?"…":"Close"}
+                            {closingId===t.id?"…":isPending?"Cancel":"Close"}
                           </button>
                         </div>
                       </div>
 
-                      {/* Live PnL — big display */}
-                      <div className="flex items-end justify-between mb-3">
-                        <div>
-                          <div className="text-slate-500 text-xs mb-0.5">Unrealized PnL</div>
-                          <div className={`text-2xl font-bold tracking-tight ${isProfit?"text-green-400":"text-red-400"}`}>
-                            {isProfit?"+":""}${pnl.toFixed(2)}
+                      {/* Pending order: show trigger info */}
+                      {isPending ? (
+                        <div className="bg-violet-500/10 rounded-xl p-3 text-xs space-y-1.5">
+                          <div className="flex justify-between"><span className="text-slate-400">Order Type</span><span className="text-violet-300 font-semibold">{t.order_type}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">Trigger Price</span><span className="text-white font-bold">${t.limit_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">Current Price</span><span className="text-cyan-300">${t.current_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">Amount</span><span className="text-white">{t.quantity?.toFixed(6)} {t.pair?.replace("USDT","")}</span></div>
+                          <div className="mt-1 text-violet-300/70">Waiting for price to reach trigger — auto-fills when condition met</div>
+                        </div>
+                      ) : (<>
+                        {/* Live PnL */}
+                        <div className="flex items-end justify-between mb-3">
+                          <div>
+                            <div className="text-slate-500 text-xs mb-0.5">Unrealized PnL</div>
+                            <div className={`text-2xl font-bold tracking-tight ${isProfit?"text-green-400":"text-red-400"}`}>{isProfit?"+":""}${pnl.toFixed(2)}</div>
+                            <div className={`text-sm font-semibold ${isProfit?"text-green-500":"text-red-500"}`}>{isProfit?"+":""}{pct.toFixed(2)}%</div>
                           </div>
-                          <div className={`text-sm font-semibold ${isProfit?"text-green-500":"text-red-500"}`}>
-                            {isProfit?"+":""}{pct.toFixed(2)}%
+                          <div className="text-right">
+                            <div className="text-slate-500 text-xs mb-0.5">Current Price</div>
+                            <div className="text-white font-bold text-lg">${t.current_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
+                            <div className="text-slate-500 text-xs">{t.current_value?`Value $${t.current_value?.toLocaleString(undefined,{maximumFractionDigits:2})}`:""}</div>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-slate-500 text-xs mb-0.5">Current Price</div>
-                          <div className="text-white font-bold text-lg">${t.current_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
-                          <div className="text-slate-500 text-xs">{t.current_value?`Value $${t.current_value?.toLocaleString(undefined,{maximumFractionDigits:2})}`:""}</div>
+                        {/* Position details grid */}
+                        <div className="grid grid-cols-4 gap-2 text-xs bg-slate-800/60 rounded-lg p-2.5">
+                          <div className="text-center"><div className="text-slate-500 mb-0.5">Entry</div><div className="text-white font-medium">${t.entry_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div></div>
+                          <div className="text-center"><div className="text-slate-500 mb-0.5">Margin</div><div className="text-amber-400 font-semibold">${t.margin_value?.toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                          <div className="text-center"><div className="text-slate-500 mb-0.5">Stop</div><div className="text-red-400 font-semibold">${t.stop_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div><div className="text-slate-600">{t.stop_loss_pct}%</div></div>
+                          <div className="text-center"><div className="text-slate-500 mb-0.5">Target</div><div className="text-green-400 font-semibold">${t.target_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div><div className="text-slate-600">{t.take_profit_pct}%</div></div>
                         </div>
-                      </div>
-
-                      {/* Position details grid */}
-                      <div className="grid grid-cols-4 gap-2 text-xs bg-slate-800/60 rounded-lg p-2.5">
-                        <div className="text-center">
-                          <div className="text-slate-500 mb-0.5">Entry</div>
-                          <div className="text-white font-medium">${t.entry_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-slate-500 mb-0.5">Margin</div>
-                          <div className="text-amber-400 font-semibold">${t.margin_value?.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-slate-500 mb-0.5">Stop Loss</div>
-                          <div className="text-red-400 font-semibold">${t.stop_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
-                          <div className="text-slate-600">{t.stop_loss_pct}%</div>
-                        </div>
-                        <div className="text-center">
-                          <div className="text-slate-500 mb-0.5">Target</div>
-                          <div className="text-green-400 font-semibold">${t.target_price?.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
-                          <div className="text-slate-600">{t.take_profit_pct}%</div>
-                        </div>
-                      </div>
+                      </>)}
                     </div>
                   );
                 })}

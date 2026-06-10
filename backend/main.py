@@ -4,10 +4,14 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
-import jwt, bcrypt, sqlite3, requests, smtplib, threading, time, io, csv, os, hmac, hashlib
+import jwt, bcrypt, sqlite3, requests, smtplib, threading, time, io, csv, os, hmac, hashlib, json, sys
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+# Windows console defaults to cp1252 which can't encode Unicode (₿, emoji etc.)
+if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'): sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 app = FastAPI(title="CryptoBot Pro", version="3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -132,6 +136,8 @@ def init_db():
         "ALTER TABLE users ADD COLUMN name TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'trader'",
         "ALTER TABLE trades ADD COLUMN take_profit_pct REAL",
+        "ALTER TABLE trades ADD COLUMN order_type TEXT DEFAULT 'MARKET'",
+        "ALTER TABLE trades ADD COLUMN limit_price REAL",
     ]:
         try: c.execute(stmt)
         except: pass
@@ -246,10 +252,28 @@ def check_price_alerts(c):
             if s and s["telegram_bot_token"] and s["telegram_alerts_enabled"]:
                 send_telegram(s["telegram_bot_token"],s["telegram_chat_id"],msg)
 
+def fill_pending_orders(c):
+    """Auto-fill LIMIT/STOP_MARKET orders when price reaches trigger."""
+    pending=c.execute("SELECT * FROM trades WHERE status='pending' AND mode='demo'").fetchall()
+    for t in pending:
+        price=live_price(t["pair"])
+        if price==0: continue
+        otype=t["order_type"] or "LIMIT"; lp=t["limit_price"] or 0
+        if lp==0: continue
+        triggered=False
+        if otype=="LIMIT":
+            triggered=(t["side"]=="BUY" and price<=lp) or (t["side"]=="SELL" and price>=lp)
+        elif otype=="STOP_MARKET":
+            triggered=(t["side"]=="BUY" and price>=lp) or (t["side"]=="SELL" and price<=lp)
+        if triggered:
+            c.execute("UPDATE trades SET status='open',entry_price=?,order_type=? WHERE id=?",(price,otype,t["id"]))
+            add_alert(t["user_id"],"success",f"Order filled: {t['side']} {t['pair']} @ ${price:,.2f} ({otype})","demo")
+
 def run_auto_bot():
     c = get_db()
     try:
         check_price_alerts(c)
+        fill_pending_orders(c)
         bots = c.execute("SELECT * FROM bot_config WHERE is_running=1").fetchall()
         for cfg in bots:
             uid=cfg["user_id"]; pair=cfg["trading_pair"] or "BTCUSDT"; mode=cfg["mode"] or "demo"
@@ -448,6 +472,10 @@ def reset_demo(user=Depends(current_user)):
 # ── DEMO TRADING ──────────────────────────────────────────────────────────────
 class DemoTradeReq(BaseModel):
     pair: str; side: str; amount_usdt: float
+    order_type: str="MARKET"       # MARKET | LIMIT | STOP_MARKET | OCO
+    limit_price: Optional[float]=None   # price to execute LIMIT / trigger STOP_MARKET
+    stop_loss_pct: Optional[float]=None  # override bot config SL
+    take_profit_pct: Optional[float]=None  # override bot config TP
 
 @app.post("/api/demo/trade")
 def place_trade(req: DemoTradeReq, user=Depends(current_user)):
@@ -458,20 +486,32 @@ def place_trade(req: DemoTradeReq, user=Depends(current_user)):
     balance=f["demo_balance"]; max_pct=f["max_trade_size_pct"] or 10; max_usdt=balance*(max_pct/100)
     if req.amount_usdt>max_usdt: raise HTTPException(400,f"Trade ${req.amount_usdt:.0f} exceeds max ${max_usdt:.0f} ({max_pct}% of balance)")
     if req.amount_usdt>balance: raise HTTPException(400,f"Insufficient balance: ${balance:.2f}")
-    open_cnt=c.execute("SELECT COUNT(*) as n FROM trades WHERE user_id=? AND mode='demo' AND status='open'",(user["id"],)).fetchone()["n"]
+    otype=req.order_type.upper()
+    # validate limit price required for LIMIT / STOP_MARKET
+    if otype in("LIMIT","STOP_MARKET") and not req.limit_price:
+        raise HTTPException(400,f"{otype} order requires a limit/trigger price")
+    open_cnt=c.execute("SELECT COUNT(*) as n FROM trades WHERE user_id=? AND mode='demo' AND status IN ('open','pending')",(user["id"],)).fetchone()["n"]
     max_open=f["max_open_trades"] or 3
     if open_cnt>=max_open: raise HTTPException(400,f"Max {max_open} open trades reached")
     price=live_price(req.pair)
     if price==0: raise HTTPException(400,"Could not fetch live price from Binance")
-    qty=round(req.amount_usdt/price,6)
-    sl_pct=cfg["stop_loss_pct"] if cfg else 1.5
+    sl_pct=req.stop_loss_pct if req.stop_loss_pct else (cfg["stop_loss_pct"] if cfg else 1.5)
+    tp_pct=req.take_profit_pct if req.take_profit_pct else (cfg["take_profit_pct"] if cfg else 3.0)
+    # MARKET / OCO: execute immediately; LIMIT / STOP_MARKET: store as pending
+    if otype in("MARKET","OCO"):
+        qty=round(req.amount_usdt/price,6); exec_price=price; status="open"
+    else:
+        lp=req.limit_price; qty=round(req.amount_usdt/lp,6); exec_price=lp; status="pending"
     c.execute("UPDATE funds SET demo_balance=? WHERE user_id=?",(balance-req.amount_usdt,user["id"]))
-    tp_pct=cfg["take_profit_pct"] if cfg else 3.0
-    cur=c.execute("INSERT INTO trades (user_id,mode,pair,side,entry_price,quantity,status,strategy,trailing_stop_pct,take_profit_pct) VALUES (?,?,?,?,?,?,'open',?,?,?)",
-                  (user["id"],"demo",req.pair,req.side,price,qty,cfg["strategy"] if cfg else "MANUAL",sl_pct,tp_pct))
+    cur=c.execute("INSERT INTO trades (user_id,mode,pair,side,entry_price,quantity,status,strategy,trailing_stop_pct,take_profit_pct,order_type,limit_price) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (user["id"],"demo",req.pair,req.side,exec_price if status=="open" else None,qty,status,
+                   cfg["strategy"] if cfg else "MANUAL",sl_pct,tp_pct,otype,req.limit_price))
     tid=cur.lastrowid; c.commit(); c.close()
-    add_alert(user["id"],"info",f"📈 {'Bought' if req.side=='BUY' else 'Sold'} {req.pair} @ ${price:,.2f} — ${req.amount_usdt:.0f} USDT","demo")
-    return {"trade_id":tid,"pair":req.pair,"side":req.side,"price":price,"quantity":qty,"amount_usdt":req.amount_usdt}
+    if status=="open":
+        add_alert(user["id"],"info",f"Trade placed: {req.side} {req.pair} @ ${exec_price:,.2f} ({otype}) — ${req.amount_usdt:.0f} USDT","demo")
+    else:
+        add_alert(user["id"],"info",f"{otype} order queued: {req.side} {req.pair} @ ${lp:,.2f} — waiting for price","demo")
+    return {"trade_id":tid,"pair":req.pair,"side":req.side,"order_type":otype,"price":exec_price,"quantity":qty,"amount_usdt":req.amount_usdt,"status":status}
 
 @app.post("/api/demo/trade/{trade_id}/close")
 def close_trade(trade_id: int, user=Depends(current_user)):
@@ -500,7 +540,7 @@ def close_trade(trade_id: int, user=Depends(current_user)):
 @app.get("/api/demo/open-trades")
 def open_trades(user=Depends(current_user)):
     c=get_db()
-    trades=c.execute("SELECT * FROM trades WHERE user_id=? AND mode='demo' AND status='open' ORDER BY created_at DESC",(user["id"],)).fetchall()
+    trades=c.execute("SELECT * FROM trades WHERE user_id=? AND mode='demo' AND status IN ('open','pending') ORDER BY created_at DESC",(user["id"],)).fetchall()
     c.close(); out=[]
     for t in trades:
         d=dict(t); p=live_price(t["pair"])
@@ -1004,15 +1044,18 @@ def ai_chat(req: ChatReq, user=Depends(current_user)):
     api_key=(s["anthropic_api_key"] if s and s["anthropic_api_key"] else None) or os.environ.get("ANTHROPIC_API_KEY","")
     if not api_key: raise HTTPException(400,"No Anthropic API key — add it in Settings → AI Advisor tab")
     try:
+        body=json.dumps({"model":"claude-haiku-4-5-20251001","max_tokens":1024,
+              "system":f"You are CryptoBot Pro's AI trading advisor. User is in {req.mode.upper()} mode. Be concise and practical. Focus on EMA/RSI strategy, Binance, risk management, and demo vs live trading best practices.",
+              "messages":req.messages},ensure_ascii=False).encode("utf-8")
         r=requests.post("https://api.anthropic.com/v1/messages",
-            headers={"x-api-key":api_key,"anthropic-version":"2023-06-01","content-type":"application/json"},
-            json={"model":"claude-haiku-4-5-20251001","max_tokens":1024,
-                  "system":f"You are CryptoBot Pro's AI trading advisor. User is in {req.mode.upper()} mode. Be concise and practical. Focus on EMA/RSI strategy, Binance, risk management, and demo vs live trading best practices.",
-                  "messages":req.messages},timeout=30)
-        data=r.json()
+            headers={"x-api-key":api_key,"anthropic-version":"2023-06-01","content-type":"application/json; charset=utf-8"},
+            data=body,timeout=30)
+        data=json.loads(r.content.decode("utf-8"))
         if r.status_code!=200: raise HTTPException(400,data.get("error",{}).get("message","AI error"))
         return {"content":data["content"][0]["text"]}
     except HTTPException: raise
+    except UnicodeEncodeError as e:
+        raise HTTPException(500,f"Encoding error — try removing special characters from your message ({e})")
     except Exception as e:
         raise HTTPException(500,str(e))
 
