@@ -151,37 +151,77 @@ const ModeSwitcher = ({ mode, onSwitch }) => {
 const LoginPage = ({ onLogin }) => {
   const [form, setForm] = useState({username:"",password:""});
   const [isReg, setIsReg] = useState(false);
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
   const submit = async () => {
     setLoading(true); setError("");
-    const body = isReg?{...form,email}:form;
+    if (isReg) {
+      if (!name.trim()) { setError("Full name is required"); setLoading(false); return; }
+      if (form.password !== confirmPw) { setError("Passwords do not match"); setLoading(false); return; }
+      if (form.password.length < 6) { setError("Password must be at least 6 characters"); setLoading(false); return; }
+    }
+    const body = isReg ? {...form, email, name} : form;
     const res = await api(isReg?"/api/auth/register":"/api/auth/login",{method:"POST",body:JSON.stringify(body)});
     if (res.token) onLogin(res); else setError(res.detail||"Login failed");
     setLoading(false);
   };
+
+  const resetRegFields = () => { setName(""); setEmail(""); setConfirmPw(""); setError(""); };
+
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-      <div className="absolute inset-0 pointer-events-none"><div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl"/><div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-violet-500/5 rounded-full blur-3xl"/></div>
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl"/>
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-violet-500/5 rounded-full blur-3xl"/>
+      </div>
       <div className="w-full max-w-md relative">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-2"><div className="w-10 h-10 bg-gradient-to-br from-cyan-400 to-violet-500 rounded-xl flex items-center justify-center"><span className="text-white font-bold text-lg">₿</span></div><span className="text-2xl font-bold text-white">CryptoBot <span className="text-cyan-400">Pro</span></span></div>
+          <div className="inline-flex items-center gap-2 mb-2">
+            <div className="w-10 h-10 bg-gradient-to-br from-cyan-400 to-violet-500 rounded-xl flex items-center justify-center"><span className="text-white font-bold text-lg">₿</span></div>
+            <span className="text-2xl font-bold text-white">CryptoBot <span className="text-cyan-400">Pro</span></span>
+          </div>
           <p className="text-slate-400 text-sm">Demo & Live algorithmic trading</p>
         </div>
+
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
-          <h2 className="text-white font-semibold text-xl mb-6">{isReg?"Create account":"Sign in"}</h2>
+          <h2 className="text-white font-semibold text-xl mb-6">{isReg?"Create Account":"Sign In"}</h2>
+
           <div className="space-y-4">
-            <Input label="Username" value={form.username} onChange={v=>setForm(f=>({...f,username:v}))} placeholder="Enter username"/>
-            {isReg && <Input label="Email" value={email} onChange={setEmail} placeholder="your@email.com"/>}
-            <Input label="Password" type="password" value={form.password} onChange={v=>setForm(f=>({...f,password:v}))} placeholder="••••••••"/>
+            {isReg && (
+              <Input label="Full Name" value={name} onChange={setName} placeholder="Your full name"/>
+            )}
+            <Input label="Username" value={form.username} onChange={v=>setForm(f=>({...f,username:v}))} placeholder="Choose a username"/>
+            {isReg && (
+              <Input label="Email Address" value={email} onChange={setEmail} placeholder="your@email.com"/>
+            )}
+            <Input label="Password" type="password" value={form.password} onChange={v=>setForm(f=>({...f,password:v}))} placeholder="••••••••" hint={isReg?"Minimum 6 characters":undefined}/>
+            {isReg && (
+              <Input label="Confirm Password" type="password" value={confirmPw} onChange={setConfirmPw} placeholder="Repeat your password"/>
+            )}
           </div>
-          {error && <div className="mt-4 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-3">{error}</div>}
-          <button onClick={submit} disabled={loading} className="w-full mt-6 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-cyan-500/20">
+
+          {error && (
+            <div className="mt-4 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-3 flex items-start gap-2">
+              <Icon name="warning" size={15} className="flex-shrink-0 mt-0.5"/>
+              {error}
+            </div>
+          )}
+
+          <button onClick={submit} disabled={loading}
+            className="w-full mt-6 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 shadow-lg shadow-cyan-500/20">
             {loading?"Please wait…":isReg?"Create Account":"Sign In"}
           </button>
-          <p className="text-center text-slate-500 text-sm mt-4">{isReg?"Have an account? ":"No account? "}<button onClick={()=>{setIsReg(!isReg);setError("");}} className="text-cyan-400 hover:text-cyan-300">{isReg?"Sign in":"Register"}</button></p>
-          {!isReg && <p className="text-center text-slate-600 text-xs mt-2">Demo login: <span className="text-slate-400 font-medium">demo / demo123</span></p>}
+
+          <p className="text-center text-slate-500 text-sm mt-4">
+            {isReg?"Already have an account? ":"Don't have an account? "}
+            <button onClick={()=>{setIsReg(!isReg);resetRegFields();setForm({username:"",password:""});}}
+              className="text-cyan-400 hover:text-cyan-300 font-medium">{isReg?"Sign In":"Register"}</button>
+          </p>
+          {!isReg && <p className="text-center text-slate-600 text-xs mt-2">Demo: <span className="text-slate-400 font-medium">demo / demo123</span></p>}
         </div>
       </div>
     </div>
@@ -644,18 +684,42 @@ const AlertsPage = ({ token }) => {
 };
 
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
-const SettingsPage = ({ token, user }) => {
+const SettingsPage = ({ token, user, onProfileUpdate }) => {
   const [settings,setSettings]=useState({});
   const [funds,setFunds]=useState({});
   const [tab,setTab]=useState("funds");
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState("");
   const [testStatus,setTestStatus]=useState({});
+  const [profile,setProfile]=useState({});
+  const [pwForm,setPwForm]=useState({current:"",new_password:"",confirm:""});
+  const [profileMsg,setProfileMsg]=useState(null);
+  const [profileSaving,setProfileSaving]=useState(false);
 
   useEffect(()=>{
     api("/api/settings",{},token).then(s=>setSettings(s||{}));
     api("/api/funds",{},token).then(f=>setFunds(f||{}));
+    api("/api/auth/profile",{},token).then(p=>setProfile(p||{}));
   },[token]);
+
+  const saveProfile = async()=>{
+    setProfileSaving(true); setProfileMsg(null);
+    const res=await api("/api/auth/profile",{method:"PUT",body:JSON.stringify({name:profile.name,username:profile.username,email:profile.email})},token);
+    if(res.username){ setProfileMsg({ok:true,text:"Profile updated successfully!"}); setProfile(res); if(onProfileUpdate) onProfileUpdate(res); }
+    else setProfileMsg({ok:false,text:res.detail||"Update failed"});
+    setProfileSaving(false);
+  };
+
+  const changePassword = async()=>{
+    if(!pwForm.current||!pwForm.new_password){ setProfileMsg({ok:false,text:"Enter current and new password"}); return; }
+    if(pwForm.new_password!==pwForm.confirm){ setProfileMsg({ok:false,text:"New passwords do not match"}); return; }
+    if(pwForm.new_password.length<6){ setProfileMsg({ok:false,text:"Password must be at least 6 characters"}); return; }
+    setProfileSaving(true); setProfileMsg(null);
+    const res=await api("/api/auth/profile",{method:"PUT",body:JSON.stringify({current_password:pwForm.current,new_password:pwForm.new_password})},token);
+    if(res.username){ setProfileMsg({ok:true,text:"Password updated successfully!"}); setPwForm({current:"",new_password:"",confirm:""}); }
+    else setProfileMsg({ok:false,text:res.detail||"Password update failed"});
+    setProfileSaving(false);
+  };
 
   const doSave = async(endpoint,data,key)=>{ setSaving(true); await api(endpoint,{method:"PUT",body:JSON.stringify(data)},token); setSaved(key); setSaving(false); setTimeout(()=>setSaved(""),2500); };
   const doTest = async type=>{ setTestStatus(t=>({...t,[type]:"testing"})); try{ await api(`/api/notify/test-${type}`,{method:"POST"},token); setTestStatus(t=>({...t,[type]:"ok"})); }catch{ setTestStatus(t=>({...t,[type]:"error"})); } setTimeout(()=>setTestStatus(t=>({...t,[type]:null})),3000); };
@@ -816,12 +880,89 @@ const SettingsPage = ({ token, user }) => {
 
         {/* ── PROFILE TAB ── */}
         {tab==="profile" && <>
-          <div className="flex items-center gap-4 p-4 bg-slate-800 rounded-xl">
-            <div className="w-14 h-14 bg-gradient-to-br from-cyan-400 to-violet-500 rounded-full flex items-center justify-center text-white font-bold text-xl">{user?.username?.charAt(0)?.toUpperCase()}</div>
-            <div><div className="text-white font-semibold text-lg">{user?.username}</div><div className="text-slate-400 text-sm">{user?.email}</div></div>
+          {/* Avatar card */}
+          <div className="flex items-center gap-5 p-5 bg-gradient-to-r from-slate-800 to-slate-800/60 border border-slate-700 rounded-xl">
+            <div className="relative flex-shrink-0">
+              <div className="w-20 h-20 bg-gradient-to-br from-cyan-400 to-violet-500 rounded-full flex items-center justify-center text-white font-bold text-3xl shadow-lg shadow-cyan-500/20 select-none">
+                {(profile.name||profile.username||"?").charAt(0).toUpperCase()}
+              </div>
+              <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 bg-green-400 rounded-full border-2 border-slate-800"/>
+            </div>
+            <div className="min-w-0">
+              <div className="text-white font-bold text-xl truncate">{profile.name||profile.username||"—"}</div>
+              <div className="text-slate-400 text-sm mt-0.5 truncate">{profile.email||"—"}</div>
+              <div className="flex items-center gap-2 mt-2 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 text-xs font-semibold rounded-full capitalize">
+                  {profile.role||"trader"}
+                </span>
+                <span className="text-slate-600 text-xs">ID #{profile.id||"—"}</span>
+              </div>
+            </div>
           </div>
-          <Input label="Username" value={user?.username||""} onChange={()=>{}} readOnly/>
-          <Input label="Email" value={user?.email||""} onChange={()=>{}} readOnly/>
+
+          {profileMsg && (
+            <div className={`text-sm rounded-xl px-4 py-3 flex items-center gap-2 ${profileMsg.ok?"bg-green-500/10 border border-green-500/20 text-green-400":"bg-red-500/10 border border-red-500/20 text-red-400"}`}>
+              <Icon name={profileMsg.ok?"check":"warning"} size={15} className="flex-shrink-0"/>
+              {profileMsg.text}
+            </div>
+          )}
+
+          {/* Personal Info */}
+          <div>
+            <h4 className="text-white font-semibold mb-3">Personal Info</h4>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Input label="Full Name" value={profile.name||""} onChange={v=>setProfile(p=>({...p,name:v}))} placeholder="Your full name"/>
+              <Input label="Username" value={profile.username||""} onChange={v=>setProfile(p=>({...p,username:v}))} placeholder="username" hint="Changing username requires re-login"/>
+              <Input label="Email Address" value={profile.email||""} onChange={v=>setProfile(p=>({...p,email:v}))} placeholder="your@email.com"/>
+              <Input label="Role" value={profile.role||"trader"} onChange={()=>{}} readOnly hint="Role is assigned by admin"/>
+            </div>
+            <button onClick={saveProfile} disabled={profileSaving}
+              className="mt-4 flex items-center gap-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 text-white font-semibold px-6 py-2.5 rounded-xl text-sm transition-all disabled:opacity-50 shadow-lg shadow-cyan-500/10">
+              {profileSaving?"Saving…":<><Icon name="check" size={14}/>Save Profile</>}
+            </button>
+          </div>
+
+          {/* Change Password */}
+          <div className="border-t border-slate-700 pt-5">
+            <h4 className="text-white font-semibold mb-1">Change Password</h4>
+            <p className="text-slate-500 text-xs mb-4">Leave blank if you don't want to change your password.</p>
+            <div className="space-y-3">
+              <Input label="Current Password" type="password" value={pwForm.current} onChange={v=>setPwForm(p=>({...p,current:v}))} placeholder="Enter your current password"/>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                <Input label="New Password" type="password" value={pwForm.new_password} onChange={v=>setPwForm(p=>({...p,new_password:v}))} placeholder="New password" hint="Minimum 6 characters"/>
+                <Input label="Confirm New Password" type="password" value={pwForm.confirm} onChange={v=>setPwForm(p=>({...p,confirm:v}))} placeholder="Repeat new password"/>
+              </div>
+            </div>
+            {pwForm.new_password && pwForm.confirm && pwForm.new_password!==pwForm.confirm && (
+              <p className="text-red-400 text-xs mt-1.5 flex items-center gap-1"><Icon name="warning" size={12}/>Passwords do not match</p>
+            )}
+            {pwForm.new_password && pwForm.confirm && pwForm.new_password===pwForm.confirm && (
+              <p className="text-green-400 text-xs mt-1.5 flex items-center gap-1"><Icon name="check" size={12}/>Passwords match</p>
+            )}
+            <button onClick={changePassword} disabled={profileSaving}
+              className="mt-4 flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-slate-500 text-white font-medium px-5 py-2.5 rounded-xl text-sm transition-all disabled:opacity-50">
+              {profileSaving?"Updating…":<><Icon name="shield" size={14}/>Update Password</>}
+            </button>
+          </div>
+
+          {/* Account Info */}
+          <div className="border-t border-slate-700 pt-5">
+            <h4 className="text-white font-semibold mb-3">Account Info</h4>
+            <div className="bg-slate-800 rounded-xl p-4 space-y-2.5 text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Member since</span>
+                <span className="text-white">{profile.created_at?new Date(profile.created_at).toLocaleDateString(undefined,{year:"numeric",month:"long",day:"numeric"}):"—"}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">User ID</span>
+                <span className="text-slate-500 font-mono text-xs">#{profile.id||"—"}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Account role</span>
+                <span className="text-cyan-400 capitalize font-medium">{profile.role||"trader"}</span>
+              </div>
+            </div>
+          </div>
         </>}
       </div>
     </div>
@@ -1021,7 +1162,7 @@ export default function App() {
     analytics:<AnalyticsPage token={auth.token} mode={mode}/>,
     alerts:<AlertsPage token={auth.token}/>,
     chat:<ChatPage token={auth.token} user={auth} mode={mode}/>,
-    settings:<SettingsPage token={auth.token} user={auth}/>,
+    settings:<SettingsPage token={auth.token} user={auth} onProfileUpdate={p=>{ const updated={...auth,username:p.username,email:p.email}; setAuth(updated); localStorage.setItem("cb_auth",JSON.stringify(updated)); }}/>,
   };
 
   const SidebarContent = () => (

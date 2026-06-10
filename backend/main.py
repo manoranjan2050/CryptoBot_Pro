@@ -129,6 +129,8 @@ def init_db():
         "ALTER TABLE trades ADD COLUMN trailing_high REAL",
         "ALTER TABLE trades ADD COLUMN trailing_stop_pct REAL",
         "ALTER TABLE settings ADD COLUMN anthropic_api_key TEXT",
+        "ALTER TABLE users ADD COLUMN name TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'trader'",
     ]:
         try: c.execute(stmt)
         except: pass
@@ -332,7 +334,7 @@ class LoginReq(BaseModel):
     username: str; password: str
 
 class RegisterReq(BaseModel):
-    username: str; email: str; password: str
+    username: str; email: str; password: str; name: Optional[str]=""
 
 @app.post("/api/auth/login")
 def login(req: LoginReq):
@@ -346,7 +348,7 @@ def register(req: RegisterReq):
     c=get_db()
     try:
         pw=bcrypt.hashpw(req.password.encode(),bcrypt.gensalt()).decode()
-        cur=c.execute("INSERT INTO users (username,email,password_hash) VALUES (?,?,?)",(req.username,req.email,pw))
+        cur=c.execute("INSERT INTO users (username,email,password_hash,name) VALUES (?,?,?,?)",(req.username,req.email,pw,req.name or ""))
         uid=cur.lastrowid
         c.execute("INSERT OR IGNORE INTO settings (user_id) VALUES (?)",(uid,))
         c.execute("INSERT OR IGNORE INTO bot_config (user_id) VALUES (?)",(uid,))
@@ -357,6 +359,44 @@ def register(req: RegisterReq):
         raise HTTPException(400,"Username or email taken")
     finally:
         c.close()
+
+# ── PROFILE ───────────────────────────────────────────────────────────────────
+@app.get("/api/auth/profile")
+def get_profile(user=Depends(current_user)):
+    c=get_db(); u=c.execute("SELECT id,username,email,name,role,created_at FROM users WHERE id=?",(user["id"],)).fetchone(); c.close()
+    if not u: raise HTTPException(404,"User not found")
+    return dict(u)
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str]=None; username: Optional[str]=None; email: Optional[str]=None
+    current_password: Optional[str]=None; new_password: Optional[str]=None
+
+@app.put("/api/auth/profile")
+def update_profile(req: ProfileUpdate, user=Depends(current_user)):
+    c=get_db()
+    u=c.execute("SELECT * FROM users WHERE id=?",(user["id"],)).fetchone()
+    if not u: c.close(); raise HTTPException(404,"User not found")
+    updates={}
+    if req.name is not None: updates["name"]=req.name
+    if req.username and req.username!=u["username"]:
+        if c.execute("SELECT id FROM users WHERE username=? AND id!=?",(req.username,user["id"])).fetchone():
+            c.close(); raise HTTPException(400,"Username already taken")
+        updates["username"]=req.username
+    if req.email and req.email!=u["email"]:
+        if c.execute("SELECT id FROM users WHERE email=? AND id!=?",(req.email,user["id"])).fetchone():
+            c.close(); raise HTTPException(400,"Email already taken")
+        updates["email"]=req.email
+    if req.new_password:
+        if not req.current_password: c.close(); raise HTTPException(400,"Current password is required")
+        if not bcrypt.checkpw(req.current_password.encode(),u["password_hash"].encode()):
+            c.close(); raise HTTPException(401,"Current password is incorrect")
+        if len(req.new_password)<6: c.close(); raise HTTPException(400,"Password must be at least 6 characters")
+        updates["password_hash"]=bcrypt.hashpw(req.new_password.encode(),bcrypt.gensalt()).decode()
+    if updates:
+        c.execute(f"UPDATE users SET {','.join(f'{k}=?' for k in updates)} WHERE id=?",(*updates.values(),user["id"]))
+        c.commit()
+    u2=c.execute("SELECT id,username,email,name,role,created_at FROM users WHERE id=?",(user["id"],)).fetchone(); c.close()
+    return dict(u2)
 
 # ── MODE ──────────────────────────────────────────────────────────────────────
 @app.get("/api/bot/mode")
