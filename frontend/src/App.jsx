@@ -1600,32 +1600,78 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
 };
 
 // ── AI CHAT ───────────────────────────────────────────────────────────────────
+const PROVIDER_META={
+  groq:{name:"Groq",color:"text-orange-400 border-orange-500/40 bg-orange-500/15",dot:"bg-orange-400"},
+  gemini:{name:"Gemini",color:"text-blue-400 border-blue-500/40 bg-blue-500/15",dot:"bg-blue-400"},
+  openrouter:{name:"OpenRouter",color:"text-emerald-400 border-emerald-500/40 bg-emerald-500/15",dot:"bg-emerald-400"},
+  anthropic:{name:"Claude",color:"text-violet-400 border-violet-500/40 bg-violet-500/15",dot:"bg-violet-400"},
+};
+
 const ChatPage = ({ token, user, mode }) => {
   const [messages,setMessages]=useState([{role:"assistant",content:`👋 Hi! I'm your CryptoBot AI advisor.\nYou're in **${mode.toUpperCase()} mode**.\n\nAsk me about strategies, risk management, or how to configure your bot.`}]);
   const [input,setInput]=useState("");
   const [loading,setLoading]=useState(false);
+  const [providers,setProviders]=useState([]);
+  const [activeProvider,setActiveProvider]=useState("");  // ""=settings default
   const bottomRef=useRef(null);
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); },[messages]);
+  useEffect(()=>{
+    api("/api/chat/providers",{},token).then(r=>{
+      if(r?.providers){ setProviders(r.providers); setActiveProvider(r.default||""); }
+    });
+  },[token]);
   const send = async()=>{
     if(!input.trim()||loading) return;
     const userMsg=input.trim(); setInput("");
     setMessages(m=>[...m,{role:"user",content:userMsg}]); setLoading(true);
     try {
-      const apiMsgs=messages.concat([{role:"user",content:userMsg}]).filter((m,i)=>m.role!=="assistant"||i>0).map(m=>({role:m.role,content:m.content}));
-      const data=await api("/api/chat",{method:"POST",body:JSON.stringify({messages:apiMsgs,mode})},token);
+      const apiMsgs=messages.concat([{role:"user",content:userMsg}])
+        .filter((m,i)=>m.role!=="assistant"||i>0)
+        .filter(m=>m.role==="user"||typeof m.content==="string")
+        .map(m=>({role:m.role,content:m.content}));
+      const body={messages:apiMsgs,mode};
+      if(activeProvider) body.provider=activeProvider;
+      const data=await api("/api/chat",{method:"POST",body:JSON.stringify(body)},token);
       const errMsg=data.detail||"";
       if(errMsg.includes("credit balance")||errMsg.includes("Plans & Billing")){
         setMessages(m=>[...m,{role:"assistant",content:"__CREDIT_ERROR__"}]);
+      } else if(data.results){
+        // Compare All mode — one bubble per provider
+        setMessages(m=>[...m,{role:"assistant",content:{__multi:data.results}}]);
       } else {
-        setMessages(m=>[...m,{role:"assistant",content:data.content||errMsg||"Sorry, couldn't process that."}]);
+        setMessages(m=>[...m,{role:"assistant",content:data.content||errMsg||"Sorry, couldn't process that.",provider:data.provider}]);
       }
-    } catch { setMessages(m=>[...m,{role:"assistant",content:"Connection error. Check your Anthropic API key in Settings → AI Advisor."}]); }
+    } catch { setMessages(m=>[...m,{role:"assistant",content:"Connection error. Check your AI API keys in Settings → AI Advisor."}]); }
     setLoading(false);
   };
   const suggestions=["Best risk rules for demo mode?","When should I switch to live?","How to size positions properly?","Explain EMA crossover signals"];
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
-      <div className="mb-4"><h1 className="text-white text-2xl font-bold">AI Advisor</h1><p className="text-slate-500 text-sm mt-0.5">Powered by Claude · context-aware for <ModeBadge mode={mode}/> mode</p></div>
+      <div className="mb-4 flex items-start justify-between flex-wrap gap-3">
+        <div><h1 className="text-white text-2xl font-bold">AI Advisor</h1><p className="text-slate-500 text-sm mt-0.5">Context-aware for <ModeBadge mode={mode}/> mode</p></div>
+        {/* Active AI selector */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {providers.map(p=>{
+            const meta=PROVIDER_META[p.id]||{name:p.id,color:"text-slate-400 border-slate-700 bg-slate-800",dot:"bg-slate-500"};
+            const active=activeProvider===p.id;
+            return (
+              <button key={p.id} onClick={()=>{ if(!p.configured) return; setActiveProvider(p.id); api("/api/settings",{method:"PUT",body:JSON.stringify({ai_provider:p.id})},token); }} disabled={!p.configured}
+                title={p.configured?`Use ${p.label}`:`${p.label} — no API key in Settings`}
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border font-semibold transition-all ${active?meta.color:p.configured?"text-slate-400 border-slate-700 bg-slate-800 hover:text-white hover:border-slate-600":"text-slate-700 border-slate-800 bg-slate-900 cursor-not-allowed"}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${p.configured?meta.dot:"bg-slate-700"}`}/>
+                {meta.name}
+              </button>
+            );
+          })}
+          {providers.filter(p=>p.configured).length>=2 && (
+            <button onClick={()=>setActiveProvider("all")}
+              title="Ask all configured AIs at once and compare answers"
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border font-bold transition-all ${activeProvider==="all"?"text-cyan-400 border-cyan-500/40 bg-cyan-500/15":"text-slate-400 border-slate-700 bg-slate-800 hover:text-white hover:border-slate-600"}`}>
+              ⚡ Compare All
+            </button>
+          )}
+        </div>
+      </div>
       <div className="flex-1 bg-slate-900 border border-slate-800 rounded-xl flex flex-col overflow-hidden">
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {messages.map((m,i)=>(
@@ -1645,7 +1691,28 @@ const ChatPage = ({ token, user, mode }) => {
                       Open Anthropic Billing →
                     </a>
                   </div>
-                : <div className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${m.role==="user"?"bg-gradient-to-r from-cyan-500 to-violet-500 text-white rounded-tr-sm":"bg-slate-800 text-slate-200 rounded-tl-sm"}`}>{m.content}</div>
+                : (typeof m.content==="object"&&m.content?.__multi)
+                ? <div className="max-w-[85%] space-y-2.5">
+                    {m.content.__multi.map(r=>{
+                      const meta=PROVIDER_META[r.provider]||{name:r.label||r.provider,color:"text-slate-400 border-slate-700 bg-slate-800",dot:"bg-slate-500"};
+                      return (
+                        <div key={r.provider} className={`rounded-2xl rounded-tl-sm border px-4 py-3 text-sm leading-relaxed ${r.error?"bg-red-500/5 border-red-500/20":"bg-slate-800 border-slate-700"}`}>
+                          <div className={`flex items-center gap-1.5 text-xs font-bold mb-1.5 ${r.error?"text-red-400":meta.color.split(" ")[0]}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${r.error?"bg-red-400":meta.dot}`}/>{r.label||meta.name}
+                          </div>
+                          <div className={`whitespace-pre-wrap ${r.error?"text-red-300/80 text-xs":"text-slate-200"}`}>{r.error||r.content}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                : <div className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${m.role==="user"?"bg-gradient-to-r from-cyan-500 to-violet-500 text-white rounded-tr-sm":"bg-slate-800 text-slate-200 rounded-tl-sm"}`}>
+                    {m.provider&&PROVIDER_META[m.provider]&&(
+                      <div className={`flex items-center gap-1.5 text-xs font-bold mb-1.5 ${PROVIDER_META[m.provider].color.split(" ")[0]}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${PROVIDER_META[m.provider].dot}`}/>{PROVIDER_META[m.provider].name}
+                      </div>
+                    )}
+                    {m.content}
+                  </div>
               }
               {m.role==="user"&&<div className="w-8 h-8 bg-slate-700 rounded-full flex items-center justify-center text-xs font-bold text-slate-300 flex-shrink-0 mt-1">{user?.username?.charAt(0)?.toUpperCase()}</div>}
             </div>

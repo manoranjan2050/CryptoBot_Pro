@@ -1426,6 +1426,7 @@ def daily_summary(user=Depends(current_user)):
 # ── AI CHAT PROXY ─────────────────────────────────────────────────────────────
 class ChatReq(BaseModel):
     messages: list; mode: str="demo"
+    provider: Optional[str]=None  # override settings: groq|gemini|openrouter|anthropic|all
 
 AI_SYSTEM = "You are CryptoBot Pro's AI trading advisor. Be concise and practical. Focus on EMA/RSI/MACD strategy, Binance, risk management, and demo vs live trading best practices."
 
@@ -1452,41 +1453,79 @@ def _gemini(api_key, model, system, messages):
     if r.status_code!=200: raise HTTPException(400,data.get("error",{}).get("message","Gemini error"))
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
+PROVIDER_LABELS={"groq":"Groq (Llama 3.3)","gemini":"Google Gemini","openrouter":"OpenRouter","anthropic":"Claude (Anthropic)"}
+
+def _provider_key(s, provider):
+    """Return the saved API key for a provider, or '' if not configured."""
+    if provider=="groq": return (s and s["groq_api_key"]) or ""
+    if provider=="gemini": return (s and s["gemini_api_key"]) or ""
+    if provider=="openrouter": return (s and s["openrouter_api_key"]) or ""
+    if provider=="anthropic": return (s and s["anthropic_api_key"]) or os.environ.get("ANTHROPIC_API_KEY","")
+    return ""
+
+def _call_provider(provider, key, model_override, system, messages):
+    """Call one AI provider, return response text. Raises HTTPException on error."""
+    if provider=="groq":
+        if not key: raise HTTPException(400,"No Groq API key — add it in Settings → AI Advisor (free at console.groq.com)")
+        model=model_override or "llama-3.3-70b-versatile"
+        return _openai_compat("https://api.groq.com/openai/v1",key,model,system,messages)
+    elif provider=="openrouter":
+        if not key: raise HTTPException(400,"No OpenRouter API key — add it in Settings → AI Advisor (free at openrouter.ai)")
+        model=model_override or "meta-llama/llama-3.1-8b-instruct:free"
+        return _openai_compat("https://openrouter.ai/api/v1",key,model,system,messages,
+            extra_headers={"HTTP-Referer":"http://localhost:3000","X-Title":"CryptoBot Pro"})
+    elif provider=="gemini":
+        if not key: raise HTTPException(400,"No Gemini API key — add it in Settings → AI Advisor (free at aistudio.google.com)")
+        model=model_override or "gemini-1.5-flash"
+        return _gemini(key,model,system,messages)
+    else:  # anthropic
+        if not key: raise HTTPException(400,"No Anthropic API key — add it in Settings → AI Advisor (or switch to Groq/Gemini free tier)")
+        model=model_override or "claude-haiku-4-5-20251001"
+        body=json.dumps({"model":model,"max_tokens":1024,"system":system,"messages":messages},
+            ensure_ascii=False).encode("utf-8")
+        r=requests.post("https://api.anthropic.com/v1/messages",
+            headers={"x-api-key":key,"anthropic-version":"2023-06-01","content-type":"application/json; charset=utf-8"},
+            data=body,timeout=30)
+        data=json.loads(r.content.decode("utf-8"))
+        if r.status_code!=200: raise HTTPException(400,data.get("error",{}).get("message","AI error"))
+        return data["content"][0]["text"]
+
+@app.get("/api/chat/providers")
+def chat_providers(user=Depends(current_user)):
+    """Which AI providers have keys configured + which is the default."""
+    c=get_db(); s=c.execute("SELECT * FROM settings WHERE user_id=?",(user["id"],)).fetchone(); c.close()
+    out=[]
+    for p in ("groq","gemini","openrouter","anthropic"):
+        out.append({"id":p,"label":PROVIDER_LABELS[p],"configured":bool(_provider_key(s,p))})
+    return {"providers":out,"default":(s and s["ai_provider"]) or "anthropic"}
+
 @app.post("/api/chat")
 def ai_chat(req: ChatReq, user=Depends(current_user)):
     c=get_db(); s=c.execute("SELECT * FROM settings WHERE user_id=?",(user["id"],)).fetchone(); c.close()
-    provider=(s and s["ai_provider"]) or "anthropic"
+    provider=req.provider or (s and s["ai_provider"]) or "anthropic"
     model_override=(s and s["ai_model"]) or None
     system=f"{AI_SYSTEM} User is in {req.mode.upper()} mode."
     try:
-        if provider=="groq":
-            key=(s and s["groq_api_key"]) or ""
-            if not key: raise HTTPException(400,"No Groq API key — add it in Settings → AI Advisor (free at console.groq.com)")
-            model=model_override or "llama-3.3-70b-versatile"
-            return {"content":_openai_compat("https://api.groq.com/openai/v1",key,model,system,req.messages)}
-        elif provider=="openrouter":
-            key=(s and s["openrouter_api_key"]) or ""
-            if not key: raise HTTPException(400,"No OpenRouter API key — add it in Settings → AI Advisor (free at openrouter.ai)")
-            model=model_override or "meta-llama/llama-3.1-8b-instruct:free"
-            return {"content":_openai_compat("https://openrouter.ai/api/v1",key,model,system,req.messages,
-                extra_headers={"HTTP-Referer":"http://localhost:3000","X-Title":"CryptoBot Pro"})}
-        elif provider=="gemini":
-            key=(s and s["gemini_api_key"]) or ""
-            if not key: raise HTTPException(400,"No Gemini API key — add it in Settings → AI Advisor (free at aistudio.google.com)")
-            model=model_override or "gemini-1.5-flash"
-            return {"content":_gemini(key,model,system,req.messages)}
-        else:  # anthropic (default)
-            key=(s and s["anthropic_api_key"]) or os.environ.get("ANTHROPIC_API_KEY","")
-            if not key: raise HTTPException(400,"No Anthropic API key — add it in Settings → AI Advisor (or switch to Groq/Gemini free tier)")
-            model=model_override or "claude-haiku-4-5-20251001"
-            body=json.dumps({"model":model,"max_tokens":1024,"system":system,"messages":req.messages},
-                ensure_ascii=False).encode("utf-8")
-            r=requests.post("https://api.anthropic.com/v1/messages",
-                headers={"x-api-key":key,"anthropic-version":"2023-06-01","content-type":"application/json; charset=utf-8"},
-                data=body,timeout=30)
-            data=json.loads(r.content.decode("utf-8"))
-            if r.status_code!=200: raise HTTPException(400,data.get("error",{}).get("message","AI error"))
-            return {"content":data["content"][0]["text"]}
+        # Compare mode: ask every configured provider at once
+        if provider=="all":
+            configured=[p for p in ("groq","gemini","openrouter","anthropic") if _provider_key(s,p)]
+            if not configured: raise HTTPException(400,"No AI provider keys configured — add at least one in Settings → AI Advisor")
+            results=[]
+            from concurrent.futures import ThreadPoolExecutor
+            def ask(p):
+                try:
+                    return {"provider":p,"label":PROVIDER_LABELS[p],
+                            "content":_call_provider(p,_provider_key(s,p),None,system,req.messages)}
+                except HTTPException as e:
+                    return {"provider":p,"label":PROVIDER_LABELS[p],"error":str(e.detail)}
+                except Exception as e:
+                    return {"provider":p,"label":PROVIDER_LABELS[p],"error":str(e)}
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results=list(pool.map(ask,configured))
+            return {"results":results,"mode":"all"}
+        # Single provider (request override or settings default)
+        content=_call_provider(provider,_provider_key(s,provider),model_override,system,req.messages)
+        return {"content":content,"provider":provider,"label":PROVIDER_LABELS.get(provider,provider)}
     except HTTPException: raise
     except UnicodeEncodeError as e:
         raise HTTPException(500,f"Encoding error ({e})")
