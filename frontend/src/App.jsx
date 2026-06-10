@@ -947,15 +947,118 @@ const SettingsPage = ({ token, user, onProfileUpdate }) => {
         </>}
 
         {/* ── BINANCE API TAB ── */}
-        {tab==="api" && <>
-          <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
-            <Icon name="warning" size={16} className="text-amber-400 flex-shrink-0 mt-0.5"/>
-            <p className="text-amber-300 text-sm">Enable <strong>trading permissions only</strong>. Never enable withdrawal permissions on bot keys. IP whitelist your server for extra security.</p>
-          </div>
-          <Input label="Binance API Key" value={settings.binance_api_key} onChange={v=>setSettings(s=>({...s,binance_api_key:v}))} placeholder="Paste your API key"/>
-          <Input label="Binance Secret Key" type="password" value={settings.binance_secret_key?.startsWith("••")?"":settings.binance_secret_key||""} onChange={v=>setSettings(s=>({...s,binance_secret_key:v}))} placeholder="Paste your secret key"/>
-          <SaveBtn dataKey="settings"/>
-        </>}
+        {tab==="api" && (()=>{
+          const [apiTest,setApiTest]=React.useState(null);
+          const [apiTesting,setApiTesting]=React.useState(false);
+          const [showFuturesGuide,setShowFuturesGuide]=React.useState(false);
+          const testApi=async()=>{
+            setApiTesting(true); setApiTest(null);
+            const r=await api("/api/settings/test-binance",{method:"POST"},token);
+            if(!r||!r.status) setApiTest({_ok:false,_err:"Cannot reach backend — is the server running on port 8000?"});
+            else if(r.detail) setApiTest({_ok:false,_err:typeof r.detail==="string"?r.detail:r.detail[0]?.msg||"Error"});
+            else setApiTest({...r,_ok:true});
+            setApiTesting(false);
+          };
+          return(<>
+            <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+              <Icon name="warning" size={16} className="text-amber-400 flex-shrink-0 mt-0.5"/>
+              <p className="text-amber-300 text-sm">Enable <strong>Spot & Margin Trading only</strong>. Never enable withdrawal permissions on bot keys. For Futures — see the guide below.</p>
+            </div>
+            <Input label="Binance API Key" value={settings.binance_api_key} onChange={v=>setSettings(s=>({...s,binance_api_key:v}))} placeholder="Paste your API key"/>
+            <Input label="Binance Secret Key" type="password" value={settings.binance_secret_key?.startsWith("••")?"":settings.binance_secret_key||""} onChange={v=>setSettings(s=>({...s,binance_secret_key:v}))} placeholder="Paste your secret key"/>
+            <SaveBtn dataKey="settings"/>
+
+            {/* Test connection button */}
+            <div className="border-t border-slate-700 pt-4">
+              <button onClick={testApi} disabled={apiTesting}
+                className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-xl text-sm font-semibold text-white transition-colors">
+                {apiTesting ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>Testing…</> : <><Icon name="chart" size={14}/>Test API Connection</>}
+              </button>
+              {/* test result */}
+              {apiTest && !apiTest._ok && <div className="mt-3 p-4 bg-red-500/10 border border-red-500/20 rounded-xl"><p className="text-red-300 text-sm font-medium">Test failed</p><p className="text-red-400 text-xs mt-1">{apiTest._err}</p></div>}
+              {apiTest?.status==="invalid_key" && <div className="mt-3 p-4 bg-red-500/10 border border-red-500/20 rounded-xl">
+                <p className="text-red-300 font-semibold text-sm mb-1">Invalid API Key or Signature</p>
+                <ul className="text-red-300/80 text-xs space-y-1 list-disc list-inside">
+                  <li>Make sure you copied the <strong>full</strong> API key (no spaces, no truncation)</li>
+                  <li>Secret key can only be viewed at creation — if lost, delete the key and create a new one</li>
+                  <li>Check that your <strong>system clock</strong> is accurate (Binance rejects requests ±1 second off)</li>
+                </ul>
+              </div>}
+              {apiTest?.status==="error" && <div className="mt-3 p-4 bg-red-500/10 border border-red-500/20 rounded-xl">
+                <p className="text-red-300 font-semibold text-sm mb-1">Binance Error {apiTest.binance_code||""}</p>
+                <p className="text-red-400 text-xs">{apiTest.message}</p>
+              </div>}
+              {apiTest?.status==="ok" && <>
+                {/* Spot success card */}
+                <div className="mt-3 p-4 bg-emerald-500/10 border border-emerald-500/25 rounded-xl space-y-3">
+                  <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"/><span className="text-emerald-300 font-semibold text-sm">Spot API — Connected</span></div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-slate-800 rounded-lg p-2.5"><div className="text-slate-400 mb-1">USDT Balance</div><div className="text-white font-bold">${(apiTest.spot?.usdt_free||0).toLocaleString()}</div></div>
+                    <div className="bg-slate-800 rounded-lg p-2.5"><div className="text-slate-400 mb-1">Can Trade</div><div className={apiTest.spot?.can_trade?"text-emerald-400 font-bold":"text-red-400 font-bold"}>{apiTest.spot?.can_trade?"Yes":"No"}</div></div>
+                    <div className="bg-slate-800 rounded-lg p-2.5 col-span-2"><div className="text-slate-400 mb-1.5">Permissions</div><div className="flex flex-wrap gap-1.5">{(apiTest.spot?.permissions||[]).map(p=><span key={p} className="px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 text-xs">{p}</span>)}{(apiTest.spot?.permissions||[]).length===0&&<span className="text-slate-500 text-xs">None returned</span>}</div></div>
+                    {(apiTest.spot?.can_withdraw) && <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-2.5 col-span-2"><p className="text-red-300 text-xs font-semibold">Warning: Withdrawal is enabled on this key. Disable it on Binance for security.</p></div>}
+                  </div>
+                  {Object.keys(apiTest.spot?.top_balances||{}).length>0 && <div><p className="text-slate-400 text-xs mb-1.5">Non-zero Balances</p><div className="flex flex-wrap gap-1.5">{Object.entries(apiTest.spot.top_balances).map(([k,v])=><span key={k} className="px-2 py-0.5 rounded-full bg-slate-700 text-slate-200 text-xs">{k}: {v}</span>)}</div></div>}
+                </div>
+                {/* Futures card */}
+                {apiTest.futures && <>
+                  {apiTest.futures.ok
+                    ? <div className="mt-3 p-4 bg-violet-500/10 border border-violet-500/25 rounded-xl">
+                        <div className="flex items-center gap-2 mb-2"><div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse"/><span className="text-violet-300 font-semibold text-sm">Futures API — Connected</span></div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="bg-slate-800 rounded-lg p-2.5"><div className="text-slate-400 mb-1">Wallet Balance</div><div className="text-white font-bold">${apiTest.futures.wallet_balance?.toLocaleString()}</div></div>
+                          <div className="bg-slate-800 rounded-lg p-2.5"><div className="text-slate-400 mb-1">Unrealized PnL</div><div className={apiTest.futures.unrealized_pnl>=0?"text-emerald-400 font-bold":"text-red-400 font-bold"}>${apiTest.futures.unrealized_pnl}</div></div>
+                        </div>
+                      </div>
+                    : <div className="mt-3 p-4 bg-orange-500/10 border border-orange-500/25 rounded-xl">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-orange-400"/><span className="text-orange-300 font-semibold text-sm">Futures API — Not available</span></div>
+                          <button onClick={()=>setShowFuturesGuide(v=>!v)} className="text-orange-400 text-xs underline">{showFuturesGuide?"Hide fix":"How to fix"}</button>
+                        </div>
+                        <p className="text-orange-300/70 text-xs mt-1.5">{apiTest.futures.message||"Futures not enabled on this key"}</p>
+                        {(apiTest.futures.needs_ip_restriction||apiTest.futures.key_before_futures) && <div className="mt-2 flex flex-wrap gap-1.5">
+                          {apiTest.futures.needs_ip_restriction && <span className="px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300 text-xs">IP Restriction required</span>}
+                          {apiTest.futures.key_before_futures && <span className="px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300 text-xs">Key created before Futures opened</span>}
+                        </div>}
+                      </div>}
+                </>}
+              </>}
+            </div>
+
+            {/* Futures setup guide */}
+            <div className="border-t border-slate-700 pt-4">
+              <button onClick={()=>setShowFuturesGuide(v=>!v)} className="flex items-center justify-between w-full text-left">
+                <div className="flex items-center gap-2"><Icon name="chart" size={14} className="text-violet-400"/><span className="text-slate-300 text-sm font-medium">Futures API Setup Guide (local PC)</span></div>
+                <span className="text-slate-500 text-xs">{showFuturesGuide?"▲ Hide":"▼ Show"}</span>
+              </button>
+              {showFuturesGuide && <div className="mt-3 bg-slate-800 rounded-xl p-4 space-y-3 text-xs text-slate-300">
+                <p className="text-orange-300 font-semibold">Why you may see: "The Futures API cannot be used if the API key was created before the Futures account was opened"</p>
+                <p className="text-slate-400">Binance requires: (1) Futures account opened first, then (2) new API key created, and (3) IP Access Restriction enabled before Futures permission is allowed.</p>
+                <div className="space-y-2">
+                  {[
+                    {step:"1",title:"Open your Futures account",desc:'Login Binance → top menu → "Derivatives" → "USD-M Futures" → click "Open Now" (one-time activation)'},
+                    {step:"2",title:"Delete your old API key",desc:'Account → API Management → find your current bot key → Delete it. Old keys never gain Futures permission retroactively.'},
+                    {step:"3",title:"Create a new API key",desc:'Still in API Management → "Create API" → give it a name like "CryptoBotPro" → copy the KEY and SECRET (secret shown only once!)'},
+                    {step:"4",title:"Find your public IP",desc:'Open a browser and go to whatismyip.com — copy the IP shown (e.g. 203.0.113.45). Your local PC\'s public IP changes sometimes (if you restart your router).'},
+                    {step:"5",title:"Enable IP restriction + Futures permission",desc:'On the new key: Edit → IP Access Restriction → select "Restrict access to trusted IPs only" → add your IP. Then tick "Enable Futures". Save.'},
+                    {step:"6",title:"Paste new keys here and save",desc:'Enter the new API key and secret in the fields above → click Save → then click Test API Connection.'},
+                  ].map(s=><div key={s.step} className="flex gap-3">
+                    <div className="w-5 h-5 rounded-full bg-violet-500/20 text-violet-300 flex items-center justify-center flex-shrink-0 font-bold text-xs mt-0.5">{s.step}</div>
+                    <div><p className="text-white font-medium">{s.title}</p><p className="text-slate-400 mt-0.5">{s.desc}</p></div>
+                  </div>)}
+                </div>
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                  <p className="text-amber-300 font-medium mb-1">Dynamic IP on home internet?</p>
+                  <p className="text-amber-300/70">Your home IP may change when your router restarts. Options: (a) Use <strong>Unrestricted</strong> access on the API key (less secure), or (b) set up a static IP via a cheap VPS or VPN, or (c) update the IP whitelist on Binance whenever it changes.</p>
+                </div>
+                <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                  <p className="text-blue-300 font-medium mb-1">Portfolio Margin error?</p>
+                  <p className="text-blue-300/70">If you have Portfolio Margin enabled on Binance, Futures API requires an additional step: go to Futures → Portfolio Margin → Settings → enable API access separately.</p>
+                </div>
+              </div>}
+            </div>
+          </>);
+        })()}
 
         {/* ── AI ADVISOR TAB ── */}
         {tab==="ai" && <>

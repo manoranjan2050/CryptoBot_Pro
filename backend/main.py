@@ -4,7 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
-import jwt, bcrypt, sqlite3, requests, smtplib, threading, time, io, csv, os
+import jwt, bcrypt, sqlite3, requests, smtplib, threading, time, io, csv, os, hmac, hashlib
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -926,6 +926,56 @@ def test_email(user=Depends(current_user)):
         return {"status":"sent"}
     except Exception as e:
         raise HTTPException(400,str(e))
+
+@app.post("/api/settings/test-binance")
+def test_binance_connection(user=Depends(current_user)):
+    c=get_db(); s=c.execute("SELECT binance_api_key,binance_secret_key FROM settings WHERE user_id=?",(user["id"],)).fetchone(); c.close()
+    if not s or not s["binance_api_key"] or not s["binance_secret_key"]:
+        raise HTTPException(400,"No API keys saved — enter and save your Binance API key + secret first")
+    api_key=s["binance_api_key"]; secret=s["binance_secret_key"]
+    if api_key.startswith("••") or secret.startswith("••"):
+        raise HTTPException(400,"Keys appear masked — re-enter your actual key and secret, save, then test again")
+
+    def signed_get(base,path):
+        ts=int(time.time()*1000); qs=f"timestamp={ts}"
+        sig=hmac.new(secret.encode(),qs.encode(),hashlib.sha256).hexdigest()
+        r=requests.get(f"{base}{path}?{qs}&signature={sig}",headers={"X-MBX-APIKEY":api_key},timeout=10)
+        return r.status_code,r.json()
+
+    # connectivity check
+    try:
+        ping=requests.get("https://api.binance.com/api/v3/ping",timeout=5)
+        if ping.status_code!=200: return{"status":"error","message":"Cannot reach Binance — check your internet connection"}
+    except Exception as e: return{"status":"error","message":f"Network error: {e}"}
+
+    # spot account test
+    try:
+        code,data=signed_get("https://api.binance.com","/api/v3/account")
+        if code!=200 or "code" in data:
+            bc=data.get("code",0); msg=data.get("msg","Binance error")
+            if bc in(-2014,-2015): return{"status":"invalid_key","message":"Invalid API key or signature — check you pasted the correct key and secret","binance_code":bc}
+            return{"status":"error","message":msg,"binance_code":bc}
+        permissions=data.get("permissions",[]); can_trade=data.get("canTrade",False); can_withdraw=data.get("canWithdraw",False)
+        balances={b["asset"]:round(float(b["free"])+float(b["locked"]),8) for b in data.get("balances",[]) if float(b["free"])+float(b["locked"])>0}
+        usdt_free=round(float(next((b["free"] for b in data.get("balances",[]) if b["asset"]=="USDT"),0)),2)
+        top5=dict(sorted(balances.items(),key=lambda x:-x[1])[:5])
+        spot={"ok":True,"can_trade":can_trade,"can_withdraw":can_withdraw,"permissions":permissions,"usdt_free":usdt_free,"top_balances":top5}
+    except Exception as e: return{"status":"error","message":str(e)}
+
+    # futures test (optional — may fail without futures enabled)
+    futures=None
+    try:
+        fcode,fdata=signed_get("https://fapi.binance.com","/fapi/v1/account")
+        if fcode==200 and "totalWalletBalance" in fdata:
+            futures={"ok":True,"wallet_balance":round(float(fdata.get("totalWalletBalance",0)),2),"unrealized_pnl":round(float(fdata.get("totalUnrealizedProfit",0)),2)}
+        else:
+            fmsg=fdata.get("msg",""); fbc=fdata.get("code",0)
+            futures={"ok":False,"binance_code":fbc,"message":fmsg,
+                     "needs_ip_restriction":"IP Access Restriction" in fmsg or fbc==-1130,
+                     "key_before_futures":"created before" in fmsg.lower() or fbc==-1130}
+    except Exception as e: futures={"ok":False,"message":str(e)}
+
+    return{"status":"ok","spot":spot,"futures":futures}
 
 @app.post("/api/notify/daily-summary")
 def daily_summary(user=Depends(current_user)):
