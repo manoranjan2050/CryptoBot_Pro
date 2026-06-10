@@ -21,6 +21,7 @@ const paths = {
   send:"M2.01 21L23 12 2.01 3 2 10l15 2-15 2z",
   check:"M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
   trend_up:"M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z",
+  analytics:"M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z",
   key:"M12.65 10A5.99 5.99 0 007 6c-3.31 0-6 2.69-6 6s2.69 6 6 6a5.99 5.99 0 005.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z",
   bell:"M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z",
   mail:"M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z",
@@ -85,15 +86,23 @@ const StatCard = ({ label, value, sub, icon, color="cyan" }) => {
   );
 };
 
-const CandleChart = ({ klines }) => {
+const CandleChart = ({ klines, emaFast=[], emaSlow=[] }) => {
   if (!klines?.length) return <div className="flex items-center justify-center h-full text-slate-500 text-sm">Loading chart…</div>;
-  const w=700,h=200,prices=klines.flatMap(k=>[k.high,k.low]),minP=Math.min(...prices),maxP=Math.max(...prices),range=maxP-minP||1,cw=Math.floor(w/klines.length)-1,toY=p=>h-((p-minP)/range)*(h-20)-10;
+  const w=700,h=200,prices=klines.flatMap(k=>[k.high,k.low]),minP=Math.min(...prices),maxP=Math.max(...prices),range=maxP-minP||1,cw=Math.floor(w/klines.length)-1,toY=p=>h-((p-minP)/range)*(h-20)-10,toX=i=>i*(cw+1)+cw/2;
+  const emaLine=(data,col)=>{
+    if(!data?.length) return null;
+    const offset=klines.length-data.length;
+    const pts=data.map((v,i)=>`${toX(i+offset)},${toY(v.value??v)}`).join(" ");
+    return <polyline points={pts} fill="none" stroke={col} strokeWidth="1.5" opacity="0.85"/>;
+  };
   return (
     <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full">
       {klines.map((k,i)=>{
-        const x=i*(cw+1)+cw/2,bull=k.close>=k.open,col=bull?"#22c55e":"#ef4444",bodyTop=toY(Math.max(k.open,k.close)),bodyH=Math.max(2,Math.abs(toY(k.open)-toY(k.close)));
+        const x=toX(i),bull=k.close>=k.open,col=bull?"#22c55e":"#ef4444",bodyTop=toY(Math.max(k.open,k.close)),bodyH=Math.max(2,Math.abs(toY(k.open)-toY(k.close)));
         return <g key={i}><line x1={x} y1={toY(k.high)} x2={x} y2={toY(k.low)} stroke={col} strokeWidth="1"/><rect x={i*(cw+1)} y={bodyTop} width={cw} height={bodyH} fill={col}/></g>;
       })}
+      {emaLine(emaFast,"#22d3ee")}
+      {emaLine(emaSlow,"#a78bfa")}
     </svg>
   );
 };
@@ -187,11 +196,22 @@ const DashboardPage = ({ token, mode }) => {
   const [klines,setKlines]=useState([]);
   const [pair,setPair]=useState("BTCUSDT");
   const [funds,setFunds]=useState({});
+  const [emaData,setEmaData]=useState({ema_fast:[],ema_slow:[]});
+  const [fearGreed,setFearGreed]=useState([]);
 
   useEffect(()=>{
     const load=async()=>{
-      const [m,s,b,k,f]=await Promise.all([api("/api/market/overview",{},token),api(`/api/trades/stats?mode=${mode}`,{},token),api("/api/bot/config",{},token),api(`/api/market/klines/${pair}?interval=1h&limit=60`,{},token),api("/api/funds",{},token)]);
+      const [m,s,b,k,f,ema,fg]=await Promise.all([
+        api("/api/market/overview",{},token),
+        api(`/api/trades/stats?mode=${mode}`,{},token),
+        api("/api/bot/config",{},token),
+        api(`/api/market/klines/${pair}?interval=1h&limit=60`,{},token),
+        api("/api/funds",{},token),
+        api(`/api/market/ema/${pair}?interval=1h&limit=60`,{},token),
+        api("/api/market/fear-greed",{},token),
+      ]);
       setMarket(Array.isArray(m)?m:[]);setStats(s||{});setBotCfg(b||{});setKlines(Array.isArray(k)?k:[]);setFunds(f||{});
+      setEmaData(ema||{ema_fast:[],ema_slow:[]});setFearGreed(Array.isArray(fg)?fg:[]);
     };
     load(); const t=setInterval(load,30000); return()=>clearInterval(t);
   },[token,mode,pair]);
@@ -240,8 +260,45 @@ const DashboardPage = ({ token, mode }) => {
             ))}
           </div>
         </div>
-        <div className="h-52"><CandleChart klines={klines}/></div>
+        <div className="h-52"><CandleChart klines={klines} emaFast={emaData.ema_fast} emaSlow={emaData.ema_slow}/></div>
+        <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
+          <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 bg-cyan-400 inline-block rounded"/>EMA {botCfg.ema_fast||21}</span>
+          <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 bg-violet-400 inline-block rounded"/>EMA {botCfg.ema_slow||55}</span>
+        </div>
       </div>
+
+      {fearGreed.length>0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <h3 className="text-white font-semibold mb-4">Fear & Greed Index</h3>
+          <div className="flex items-center gap-6 flex-wrap">
+            {(()=>{
+              const fg=fearGreed[0]; const val=parseInt(fg.value||0);
+              const col=val>=75?"text-green-400":val>=55?"text-lime-400":val>=45?"text-amber-400":val>=25?"text-orange-400":"text-red-400";
+              const bgCol=val>=75?"bg-green-400":val>=55?"bg-lime-400":val>=45?"bg-amber-400":val>=25?"bg-orange-400":"bg-red-400";
+              return (
+                <>
+                  <div className="flex items-center gap-4">
+                    <div className={`w-16 h-16 rounded-full ${bgCol} flex items-center justify-center`}>
+                      <span className="text-slate-900 font-bold text-xl">{val}</span>
+                    </div>
+                    <div>
+                      <div className={`font-bold text-lg ${col}`}>{fg.value_classification}</div>
+                      <div className="text-slate-500 text-xs">Today · crypto market sentiment</div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    {fearGreed.slice(1,8).map((d,i)=>{
+                      const v=parseInt(d.value||0);
+                      const bc=v>=75?"bg-green-400":v>=55?"bg-lime-400":v>=45?"bg-amber-400":v>=25?"bg-orange-400":"bg-red-400";
+                      return <div key={i} className="text-center"><div className={`w-9 h-9 rounded-lg ${bc} flex items-center justify-center text-xs font-bold text-slate-900`}>{v}</div><div className="text-slate-600 text-xs mt-1">{i+1}d ago</div></div>;
+                    })}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {funds.max_daily_loss_pct && (
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
@@ -617,7 +674,7 @@ const SettingsPage = ({ token, user }) => {
     </button>
   );
 
-  const tabs=[{id:"funds",label:"Funds & Risk",icon:"shield"},{id:"api",label:"Binance API",icon:"key"},{id:"telegram",label:"Telegram",icon:"send"},{id:"email",label:"Email",icon:"mail"},{id:"profile",label:"Profile",icon:"user"}];
+  const tabs=[{id:"funds",label:"Funds & Risk",icon:"shield"},{id:"api",label:"Binance API",icon:"key"},{id:"ai",label:"AI Advisor",icon:"chat"},{id:"telegram",label:"Telegram",icon:"send"},{id:"email",label:"Email",icon:"mail"},{id:"profile",label:"Profile",icon:"user"}];
 
   return (
     <div className="space-y-6">
@@ -728,6 +785,16 @@ const SettingsPage = ({ token, user }) => {
           <SaveBtn dataKey="settings"/>
         </>}
 
+        {/* ── AI ADVISOR TAB ── */}
+        {tab==="ai" && <>
+          <div className="flex items-start gap-3 p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-xl">
+            <Icon name="chat" size={16} className="text-cyan-400 flex-shrink-0 mt-0.5"/>
+            <p className="text-slate-300 text-sm">The AI Advisor uses Claude (Anthropic). Add your API key here — get one free at <span className="text-cyan-400 font-medium">console.anthropic.com</span>. Your key is stored securely on the backend.</p>
+          </div>
+          <Input label="Anthropic API Key" type="password" value={settings.anthropic_api_key?.startsWith("sk-ant")?"":settings.anthropic_api_key||""} onChange={v=>setSettings(s=>({...s,anthropic_api_key:v}))} placeholder="sk-ant-api03-…"/>
+          <SaveBtn dataKey="settings"/>
+        </>}
+
         {/* ── TELEGRAM TAB ── */}
         {tab==="telegram" && <>
           <p className="text-slate-400 text-sm">1. Create a bot via <span className="text-cyan-400 font-medium">@BotFather</span> on Telegram → copy the token.<br/>2. Get your Chat ID from <span className="text-cyan-400 font-medium">@userinfobot</span>.</p>
@@ -773,10 +840,10 @@ const ChatPage = ({ token, user, mode }) => {
     const userMsg=input.trim(); setInput("");
     setMessages(m=>[...m,{role:"user",content:userMsg}]); setLoading(true);
     try {
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:`You are CryptoBot Pro's AI trading advisor. User is in ${mode.toUpperCase()} mode. Be concise and practical. Focus on: EMA/RSI strategy, Binance, risk management, demo vs live trading.`,messages:messages.concat([{role:"user",content:userMsg}]).filter((m,i)=>m.role!=="assistant"||i>0).map(m=>({role:m.role,content:m.content}))})});
-      const data=await res.json();
-      setMessages(m=>[...m,{role:"assistant",content:data.content?.[0]?.text||"Sorry, couldn't process that."}]);
-    } catch { setMessages(m=>[...m,{role:"assistant",content:"Connection error."}]); }
+      const apiMsgs=messages.concat([{role:"user",content:userMsg}]).filter((m,i)=>m.role!=="assistant"||i>0).map(m=>({role:m.role,content:m.content}));
+      const data=await api("/api/chat",{method:"POST",body:JSON.stringify({messages:apiMsgs,mode})},token);
+      setMessages(m=>[...m,{role:"assistant",content:data.content||data.detail||"Sorry, couldn't process that."}]);
+    } catch { setMessages(m=>[...m,{role:"assistant",content:"Connection error. Check your Anthropic API key in Settings → AI Advisor."}]); }
     setLoading(false);
   };
   const suggestions=["Best risk rules for demo mode?","When should I switch to live?","How to size positions properly?","Explain EMA crossover signals"];
@@ -807,6 +874,113 @@ const ChatPage = ({ token, user, mode }) => {
   );
 };
 
+// ── ANALYTICS ─────────────────────────────────────────────────────────────────
+const PnLChart = ({ data }) => {
+  if (!data?.length) return <div className="flex items-center justify-center h-full text-slate-500 text-sm">No closed trades yet</div>;
+  const vals=data.map(d=>d.cumulative_pnl),minV=Math.min(0,...vals),maxV=Math.max(0,...vals),range=maxV-minV||1;
+  const w=700,h=160,toY=v=>h-((v-minV)/range)*(h-20)-10,toX=i=>(i/(data.length-1||1))*w;
+  const pts=data.map((d,i)=>`${toX(i)},${toY(d.cumulative_pnl)}`).join(" ");
+  const zeroY=toY(0);
+  return (
+    <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full">
+      <defs><linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#22d3ee" stopOpacity="0.25"/><stop offset="100%" stopColor="#22d3ee" stopOpacity="0"/></linearGradient></defs>
+      <line x1="0" y1={zeroY} x2={w} y2={zeroY} stroke="#334155" strokeWidth="1" strokeDasharray="4"/>
+      <polygon points={`0,${h} ${pts} ${w},${h}`} fill="url(#pnlGrad)"/>
+      <polyline points={pts} fill="none" stroke="#22d3ee" strokeWidth="2"/>
+      {data.map((d,i)=><circle key={i} cx={toX(i)} cy={toY(d.cumulative_pnl)} r="3" fill={d.daily_pnl>=0?"#22c55e":"#ef4444"}/>)}
+    </svg>
+  );
+};
+
+const AnalyticsPage = ({ token, mode }) => {
+  const [pnlHistory,setPnlHistory]=useState([]);
+  const [summary,setSummary]=useState({});
+  const [streak,setStreak]=useState({});
+
+  useEffect(()=>{
+    Promise.all([
+      api(`/api/analytics/pnl-history?mode=${mode}`,{},token),
+      api(`/api/analytics/summary?mode=${mode}`,{},token),
+      api(`/api/analytics/streak?mode=${mode}`,{},token),
+    ]).then(([h,s,st])=>{ setPnlHistory(Array.isArray(h)?h:[]); setSummary(s||{}); setStreak(st||{}); });
+  },[token,mode]);
+
+  const SummaryBlock = ({ label, data }) => (
+    <div className="bg-slate-800 rounded-xl p-4">
+      <div className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-3">{label}</div>
+      <div className="grid grid-cols-2 gap-2 text-sm">
+        {[
+          {l:"Trades",v:data?.total||0},
+          {l:"Win Rate",v:`${data?.win_rate||0}%`,c:(data?.win_rate||0)>=50?"text-green-400":"text-red-400"},
+          {l:"Total PnL",v:`${(data?.pnl||0)>=0?"+":""}$${(data?.pnl||0).toFixed(2)}`,c:(data?.pnl||0)>=0?"text-green-400":"text-red-400"},
+          {l:"Avg Trade",v:`${(data?.avg||0)>=0?"+":""}$${(data?.avg||0).toFixed(2)}`,c:(data?.avg||0)>=0?"text-cyan-400":"text-red-400"},
+        ].map(r=><div key={r.l}><div className="text-slate-500 text-xs">{r.l}</div><div className={`font-semibold ${r.c||"text-white"}`}>{r.v}</div></div>)}
+      </div>
+    </div>
+  );
+
+  const latestPnl=pnlHistory[pnlHistory.length-1]?.cumulative_pnl||0;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-white text-2xl font-bold">Analytics</h1>
+        <p className="text-slate-500 text-sm mt-0.5">Performance breakdown · <ModeBadge mode={mode}/></p>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div><h3 className="text-white font-semibold">Cumulative PnL</h3><p className="text-slate-500 text-xs mt-0.5">{pnlHistory.length} trading days</p></div>
+          <div className={`text-2xl font-bold ${latestPnl>=0?"text-green-400":"text-red-400"}`}>{latestPnl>=0?"+":""}${latestPnl.toFixed(2)}</div>
+        </div>
+        <div className="h-44"><PnLChart data={pnlHistory}/></div>
+        {pnlHistory.length>0 && (
+          <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+            {pnlHistory.slice(-3).map(d=>(
+              <div key={d.date} className="bg-slate-800 rounded-lg p-2">
+                <div className="text-slate-500">{new Date(d.date).toLocaleDateString(undefined,{month:"short",day:"numeric"})}</div>
+                <div className={`font-semibold ${d.daily_pnl>=0?"text-green-400":"text-red-400"}`}>{d.daily_pnl>=0?"+":""}${d.daily_pnl.toFixed(2)}</div>
+                <div className="text-slate-600">{d.trades} trade{d.trades!==1?"s":""}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <SummaryBlock label="This Week" data={summary.week}/>
+        <SummaryBlock label="This Month" data={summary.month}/>
+        <SummaryBlock label="All Time" data={summary.all_time}/>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <h3 className="text-white font-semibold mb-4">Win / Loss Streak</h3>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            {l:"Current",v:`${streak.current_streak||0} ${streak.streak_type==="win"?"W":streak.streak_type==="loss"?"L":"—"}`,c:streak.streak_type==="win"?"text-green-400":streak.streak_type==="loss"?"text-red-400":"text-slate-400"},
+            {l:"Status",v:streak.streak_type==="win"?"🔥 Winning":streak.streak_type==="loss"?"❄️ Losing":"—",c:streak.streak_type==="win"?"text-green-400":streak.streak_type==="loss"?"text-red-400":"text-slate-400"},
+            {l:"Best Win Streak",v:streak.max_win_streak||0,c:"text-green-400"},
+            {l:"Worst Loss Streak",v:streak.max_loss_streak||0,c:"text-red-400"},
+          ].map(r=><div key={r.l} className="bg-slate-800 rounded-xl p-3 text-center"><div className={`text-xl font-bold ${r.c}`}>{r.v}</div><div className="text-slate-500 text-xs mt-1">{r.l}</div></div>)}
+        </div>
+      </div>
+
+      {summary.all_time && (
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-slate-900 border border-green-500/20 rounded-xl p-5">
+            <div className="text-slate-400 text-xs uppercase tracking-wider mb-1">Best Single Trade</div>
+            <div className="text-green-400 text-2xl font-bold">+${(summary.all_time.best||0).toFixed(2)}</div>
+          </div>
+          <div className="bg-slate-900 border border-red-500/20 rounded-xl p-5">
+            <div className="text-slate-400 text-xs uppercase tracking-wider mb-1">Worst Single Trade</div>
+            <div className="text-red-400 text-2xl font-bold">${(summary.all_time.worst||0).toFixed(2)}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [auth,setAuth]=useState(()=>{ try{return JSON.parse(localStorage.getItem("cb_auth")||"null");}catch{return null;} });
@@ -833,6 +1007,7 @@ export default function App() {
     {id:"trading",label:mode==="demo"?"Paper Trading":"Live Trading",icon:"trade"},
     {id:"bot",label:"Bot Control",icon:"bot"},
     {id:"history",label:"Trade History",icon:"chart"},
+    {id:"analytics",label:"Analytics",icon:"analytics"},
     {id:"alerts",label:"Alerts",icon:"alert",badge:unread},
     {id:"chat",label:"AI Advisor",icon:"chat"},
     {id:"settings",label:"Settings",icon:"settings"},
@@ -843,6 +1018,7 @@ export default function App() {
     trading:<TradingPage token={auth.token} mode={mode}/>,
     bot:<BotPage token={auth.token} mode={mode}/>,
     history:<TradesPage token={auth.token} mode={mode}/>,
+    analytics:<AnalyticsPage token={auth.token} mode={mode}/>,
     alerts:<AlertsPage token={auth.token}/>,
     chat:<ChatPage token={auth.token} user={auth} mode={mode}/>,
     settings:<SettingsPage token={auth.token} user={auth}/>,
