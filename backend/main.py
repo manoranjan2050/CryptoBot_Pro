@@ -530,22 +530,22 @@ def run_multi_bots():
                     pnl=(curr_p-entry)*t["quantity"]
                     c.execute("UPDATE bots SET total_pnl=total_pnl+?,trade_count=trade_count+1,win_count=win_count+1,last_signal='TP2 HIT' WHERE id=?",(pnl,bot["id"]))
                     c.commit(); continue
-                # Trailing / SL
-                if bot["trailing_enabled"] and t["side"]=="BUY":
-                    trail_high=t["trailing_high"] or entry
-                    if curr_p>trail_high:
-                        c.execute("UPDATE trades SET trailing_high=? WHERE id=?",(curr_p,t["id"])); trail_high=curr_p
-                    if curr_p<=trail_high*(1-sl/100):
+                # Stop management: fixed SL until TP1 books profit; after TP1 trail with break-even floor
+                if t["side"]=="BUY":
+                    if t["tp1_hit"] and bot["trailing_enabled"]:
+                        trail_high=t["trailing_high"] or entry
+                        if curr_p>trail_high:
+                            c.execute("UPDATE trades SET trailing_high=? WHERE id=?",(curr_p,t["id"])); trail_high=curr_p
+                        stop=max(entry,trail_high*(1-sl/100))
+                    elif t["tp1_hit"]:
+                        stop=entry  # break-even after TP1
+                    else:
+                        stop=entry*(1-sl/100)
+                    if curr_p<=stop:
                         close_trade_auto(c,t,curr_p,uid,"demo")
                         pnl=(curr_p-entry)*t["quantity"]
-                        c.execute("UPDATE bots SET total_pnl=total_pnl+?,trade_count=trade_count+1,last_signal='SL HIT' WHERE id=?",(pnl,bot["id"]))
-                        if pnl>=0: c.execute("UPDATE bots SET win_count=win_count+1 WHERE id=?",(bot["id"],))
-                        c.commit()
-                elif t["side"]=="BUY":
-                    if curr_p<=entry*(1-sl/100) or curr_p>=entry*(1+tp1/100):
-                        close_trade_auto(c,t,curr_p,uid,"demo")
-                        pnl=(curr_p-entry)*t["quantity"]
-                        c.execute("UPDATE bots SET total_pnl=total_pnl+?,trade_count=trade_count+1,last_signal='CLOSED' WHERE id=?",(pnl,bot["id"]))
+                        c.execute("UPDATE bots SET total_pnl=total_pnl+?,trade_count=trade_count+1,last_signal=? WHERE id=?",
+                                  (pnl,"TRAIL EXIT" if t["tp1_hit"] else "SL HIT",bot["id"]))
                         if pnl>=0: c.execute("UPDATE bots SET win_count=win_count+1 WHERE id=?",(bot["id"],))
                         c.commit()
             c.commit()
@@ -1167,10 +1167,16 @@ def run_advanced_backtest(req: AdvBacktestReq, user=Depends(current_user)):
         price=closes[i]; high=highs[i]; low=lows[i]
         dt=datetime.utcfromtimestamp(times[i]/1000).strftime("%Y-%m-%d %H:%M")
         if pos:
-            stop=(pos["trail_high"]*(1-req.sl_pct/100)) if req.trailing_enabled else (pos["entry"]*(1-req.sl_pct/100))
+            # Fixed SL until TP1 books profit; then trail (with break-even floor) so the runner can't lose
+            if pos["tp1_done"]:
+                stop=max(pos["entry"],pos["trail_high"]*(1-req.sl_pct/100)) if req.trailing_enabled else pos["entry"]
+            else:
+                stop=pos["entry"]*(1-req.sl_pct/100)
             tp1_price=pos["entry"]*(1+req.tp1_pct/100); tp2_price=pos["entry"]*(1+req.tp2_pct/100)
             if low<=stop:
-                record(stop,pos["qty"],"stop_loss",dt,pos["entry"],pos["time"],pos["entry_i"],i); sl_hits+=1; pos=None
+                reason="trail_exit" if pos["tp1_done"] else "stop_loss"
+                if not pos["tp1_done"]: sl_hits+=1
+                record(stop,pos["qty"],reason,dt,pos["entry"],pos["time"],pos["entry_i"],i); pos=None
             elif not pos["tp1_done"] and high>=tp1_price:
                 qty1=pos["qty"]*(req.tp1_qty_pct/100)
                 record(tp1_price,qty1,"tp1_partial",dt,pos["entry"],pos["time"],pos["entry_i"],i); tp1_hits+=1

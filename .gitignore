@@ -80,3 +80,7 @@ id_rsa.pub
 *.bak
 *.backup
 *.old
+
+# Local screenshots / bug reports
+bug/
+image/
