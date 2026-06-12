@@ -81,6 +81,5 @@ id_rsa.pub
 *.backup
 *.old
 
-# Local screenshots / bug reports
+# Local bug-report screenshots (image/ is tracked — used by README)
 bug/
-image/
