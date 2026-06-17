@@ -1,0 +1,188 @@
+<svg viewBox="0 0 1200 420" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#020617"/>
+      <stop offset="50%" stop-color="#0b1120"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="50%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#c084fc"/>
+      <animate attributeName="x1" values="0;0.4;0" dur="6s" repeatCount="indefinite"/>
+      <animate attributeName="x2" values="1;1.4;1" dur="6s" repeatCount="indefinite"/>
+    </linearGradient>
+    <linearGradient id="logoGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="up" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#22c55e"/><stop offset="100%" stop-color="#16a34a"/>
+    </linearGradient>
+    <linearGradient id="down" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f87171"/><stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="9" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="420" fill="url(#bg)"/>
+
+  <!-- grid -->
+  <g stroke="#1e293b" stroke-width="1" opacity="0.5">
+    <line x1="0" y1="105" x2="1200" y2="105"/>
+    <line x1="0" y1="210" x2="1200" y2="210"/>
+    <line x1="0" y1="315" x2="1200" y2="315"/>
+  </g>
+
+  <!-- glow orbs -->
+  <circle cx="220" cy="120" r="150" fill="#06b6d4" opacity="0.14" filter="url(#soft)">
+    <animate attributeName="opacity" values="0.10;0.20;0.10" dur="7s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="980" cy="300" r="170" fill="#a855f7" opacity="0.14" filter="url(#soft)">
+    <animate attributeName="opacity" values="0.18;0.08;0.18" dur="9s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- animated candlesticks (background) -->
+  <g opacity="0.9">
+    <!-- each candle: wick + body, body height animates -->
+    <g transform="translate(640,0)">
+      <line x1="0" y1="250" x2="0" y2="360" stroke="#16a34a" stroke-width="2"/>
+      <rect x="-9" y="290" width="18" height="50" rx="2" fill="url(#up)">
+        <animate attributeName="y" values="300;280;300" dur="4s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="40;70;40" dur="4s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g transform="translate(680,0)">
+      <line x1="0" y1="240" x2="0" y2="350" stroke="#dc2626" stroke-width="2"/>
+      <rect x="-9" y="270" width="18" height="55" rx="2" fill="url(#down)">
+        <animate attributeName="y" values="270;285;270" dur="4.6s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="55;45;55" dur="4.6s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g transform="translate(720,0)">
+      <line x1="0" y1="210" x2="0" y2="330" stroke="#16a34a" stroke-width="2"/>
+      <rect x="-9" y="250" width="18" height="60" rx="2" fill="url(#up)">
+        <animate attributeName="y" values="260;235;260" dur="3.6s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="50;80;50" dur="3.6s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g transform="translate(760,0)">
+      <line x1="0" y1="190" x2="0" y2="300" stroke="#16a34a" stroke-width="2"/>
+      <rect x="-9" y="220" width="18" height="65" rx="2" fill="url(#up)">
+        <animate attributeName="y" values="230;205;230" dur="4.2s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="55;85;55" dur="4.2s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g transform="translate(800,0)">
+      <line x1="0" y1="200" x2="0" y2="310" stroke="#dc2626" stroke-width="2"/>
+      <rect x="-9" y="225" width="18" height="60" rx="2" fill="url(#down)">
+        <animate attributeName="y" values="225;245;225" dur="5s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="60;48;60" dur="5s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g transform="translate(840,0)">
+      <line x1="0" y1="160" x2="0" y2="280" stroke="#16a34a" stroke-width="2"/>
+      <rect x="-9" y="190" width="18" height="70" rx="2" fill="url(#up)">
+        <animate attributeName="y" values="200;170;200" dur="3.8s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="60;95;60" dur="3.8s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g transform="translate(880,0)">
+      <line x1="0" y1="140" x2="0" y2="250" stroke="#16a34a" stroke-width="2"/>
+      <rect x="-9" y="165" width="18" height="75" rx="2" fill="url(#up)">
+        <animate attributeName="y" values="175;150;175" dur="4.4s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="65;100;65" dur="4.4s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g transform="translate(920,0)">
+      <line x1="0" y1="150" x2="0" y2="260" stroke="#dc2626" stroke-width="2"/>
+      <rect x="-9" y="175" width="18" height="65" rx="2" fill="url(#down)">
+        <animate attributeName="y" values="175;195;175" dur="4.8s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="65;50;65" dur="4.8s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g transform="translate(960,0)">
+      <line x1="0" y1="110" x2="0" y2="230" stroke="#16a34a" stroke-width="2"/>
+      <rect x="-9" y="140" width="18" height="80" rx="2" fill="url(#up)">
+        <animate attributeName="y" values="150;120;150" dur="4s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="70;105;70" dur="4s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <g transform="translate(1000,0)">
+      <line x1="0" y1="95" x2="0" y2="210" stroke="#16a34a" stroke-width="2"/>
+      <rect x="-9" y="120" width="18" height="85" rx="2" fill="url(#up)">
+        <animate attributeName="y" values="130;100;130" dur="3.5s" repeatCount="indefinite"/>
+        <animate attributeName="height" values="75;110;75" dur="3.5s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+  </g>
+
+  <!-- EMA trend line sweeping up -->
+  <polyline points="640,330 680,315 720,290 760,255 800,260 840,225 880,195 920,205 960,170 1000,140 1040,120"
+            fill="none" stroke="#22d3ee" stroke-width="3" opacity="0.85" stroke-linecap="round" stroke-linejoin="round">
+    <animate attributeName="stroke-dasharray" values="0 800;800 0" dur="3s" fill="freeze"/>
+  </polyline>
+
+  <!-- LOGO badge -->
+  <g transform="translate(90,150)">
+    <rect x="0" y="0" width="92" height="92" rx="24" fill="url(#logoGrad)" filter="url(#glow)">
+      <animate attributeName="rx" values="24;30;24" dur="5s" repeatCount="indefinite"/>
+    </rect>
+    <text x="46" y="66" font-size="58" font-weight="800" fill="#ffffff" text-anchor="middle">&#8383;</text>
+  </g>
+
+  <!-- TITLE -->
+  <text x="210" y="195" font-size="64" font-weight="800" fill="url(#title)">CryptoBot Pro</text>
+  <text x="212" y="235" font-size="23" font-weight="500" fill="#94a3b8">Full-Stack Algorithmic Crypto Trading Dashboard</text>
+
+  <!-- feature pills -->
+  <g font-size="15" font-weight="600">
+    <g transform="translate(212,262)">
+      <rect width="168" height="34" rx="17" fill="#0e7490" opacity="0.25" stroke="#22d3ee" stroke-opacity="0.4"/>
+      <text x="84" y="22" fill="#67e8f9" text-anchor="middle">6 Strategy Library</text>
+    </g>
+    <g transform="translate(392,262)">
+      <rect width="150" height="34" rx="17" fill="#6d28d9" opacity="0.25" stroke="#a855f7" stroke-opacity="0.4"/>
+      <text x="75" y="22" fill="#c4b5fd" text-anchor="middle">Multi-Bot Engine</text>
+    </g>
+    <g transform="translate(554,262)">
+      <rect width="138" height="34" rx="17" fill="#15803d" opacity="0.25" stroke="#22c55e" stroke-opacity="0.4"/>
+      <text x="69" y="22" fill="#86efac" text-anchor="middle">AI Advisor x4</text>
+    </g>
+  </g>
+
+  <!-- stat chips -->
+  <g transform="translate(212,318)" font-weight="700">
+    <text x="0" y="20" font-size="26" fill="#22c55e">83%</text>
+    <text x="0" y="40" font-size="12" fill="#64748b" font-weight="500">Top win rate</text>
+  </g>
+  <g transform="translate(320,318)" font-weight="700">
+    <text x="0" y="20" font-size="26" fill="#22d3ee">5.6x</text>
+    <text x="0" y="40" font-size="12" fill="#64748b" font-weight="500">Profit factor</text>
+  </g>
+  <g transform="translate(430,318)" font-weight="700">
+    <text x="0" y="20" font-size="26" fill="#c084fc">248</text>
+    <text x="0" y="40" font-size="12" fill="#64748b" font-weight="500">Backtested configs</text>
+  </g>
+  <g transform="translate(580,318)" font-weight="700">
+    <text x="0" y="20" font-size="26" fill="#f59e0b">$0</text>
+    <text x="0" y="40" font-size="12" fill="#64748b" font-weight="500">Free AI tier</text>
+  </g>
+
+  <!-- tech footer line -->
+  <text x="90" y="392" font-size="14" font-weight="600" fill="#475569" letter-spacing="2">FASTAPI  &#183;  REACT 18  &#183;  TAILWIND  &#183;  BINANCE API  &#183;  SQLITE</text>
+
+  <!-- floating particles -->
+  <g fill="#22d3ee">
+    <circle cx="160" cy="90" r="3" opacity="0.6"><animate attributeName="cy" values="90;70;90" dur="6s" repeatCount="indefinite"/></circle>
+    <circle cx="520" cy="70" r="2.5" opacity="0.5" fill="#a855f7"><animate attributeName="cy" values="70;55;70" dur="7s" repeatCount="indefinite"/></circle>
+    <circle cx="1120" cy="160" r="3" opacity="0.5" fill="#22c55e"><animate attributeName="cy" values="160;145;160" dur="5.5s" repeatCount="indefinite"/></circle>
+    <circle cx="1080" cy="360" r="2.5" opacity="0.5"><animate attributeName="cy" values="360;345;360" dur="6.5s" repeatCount="indefinite"/></circle>
+  </g>
+</svg>

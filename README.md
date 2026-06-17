@@ -1,8 +1,8 @@
 <div align="center">
 
-# ₿ CryptoBot Pro
+<img src="image/banner.svg" alt="CryptoBot Pro" width="100%"/>
 
-### Full-Stack Algorithmic Crypto Trading Dashboard
+<br/>
 
 **Paper trade → backtest → deploy bots → go live — all in one beautiful dashboard**
 
@@ -13,9 +13,21 @@
 [![SQLite](https://img.shields.io/badge/SQLite-3-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-[Screenshots](#-screenshots) · [Features](#-features) · [Quick Start](#-quick-start) · [Strategy Library](#-strategy-library) · [Backtesting](#-backtesting) · [AI Advisor](#-ai-advisor--4-providers-3-free) · [API Reference](#-api-reference) · [Security](#-security)
+[Screenshots](#-screenshots) · [How It Works](#-how-it-works) · [Features](#-features) · [Quick Start](#-quick-start) · [Strategy Library](#-strategy-library) · [Backtesting](#-backtesting) · [AI Advisor](#-ai-advisor--4-providers-3-free) · [API Reference](#-api-reference) · [Security](#-security)
 
 </div>
+
+---
+
+## 🔄 How It Works
+
+<div align="center">
+
+<img src="image/how-it-works.svg" alt="How CryptoBot Pro works — Connect, Pick Strategy, Backtest, Deploy Bots, Monitor" width="100%"/>
+
+</div>
+
+> **Connect** live Binance data → **pick** one of 6 strategies → **backtest** it on real history → **deploy** as many bots as you like → **monitor** with alerts, analytics and an AI advisor. Every step runs safely in Demo mode first.
 
 ---
 

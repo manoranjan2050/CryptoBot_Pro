@@ -1,0 +1,138 @@
+<svg viewBox="0 0 1200 540" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="hbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#020617"/><stop offset="100%" stop-color="#0b1120"/>
+    </linearGradient>
+    <linearGradient id="flow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0e7490"/><stop offset="100%" stop-color="#155e75"/></linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#6d28d9"/><stop offset="100%" stop-color="#5b21b6"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#15803d"/><stop offset="100%" stop-color="#166534"/></linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#b45309"/><stop offset="100%" stop-color="#92400e"/></linearGradient>
+    <linearGradient id="rose" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#be185d"/><stop offset="100%" stop-color="#9d174d"/></linearGradient>
+    <filter id="cardglow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="540" fill="url(#hbg)"/>
+
+  <!-- title -->
+  <text x="600" y="58" font-size="34" font-weight="800" fill="#f8fafc" text-anchor="middle">How CryptoBot Pro Works</text>
+  <text x="600" y="88" font-size="16" fill="#94a3b8" text-anchor="middle">From market data to automated, risk-managed trades — in five steps</text>
+
+  <!-- connecting animated flow line -->
+  <line x1="150" y1="250" x2="1050" y2="250" stroke="#1e293b" stroke-width="3"/>
+  <line x1="150" y1="250" x2="1050" y2="250" stroke="url(#flow)" stroke-width="3" stroke-dasharray="14 10" opacity="0.9">
+    <animate attributeName="stroke-dashoffset" values="0;-48" dur="1.2s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- ===== STEP 1: Connect / Market Data ===== -->
+  <g transform="translate(70,170)">
+    <circle cx="80" cy="-30" r="0" fill="#22d3ee" opacity="0.25"><animate attributeName="r" values="0;46;0" dur="3s" repeatCount="indefinite"/></circle>
+    <rect x="0" y="-40" width="160" height="180" rx="18" fill="#0f172a" stroke="#1e293b" stroke-width="1.5" filter="url(#cardglow)"/>
+    <circle cx="80" cy="14" r="32" fill="url(#cyan)"/>
+    <!-- plug/data icon -->
+    <g transform="translate(80,14)" stroke="#a5f3fc" stroke-width="3.5" fill="none" stroke-linecap="round">
+      <path d="M -12 -6 L -12 6 M 12 -6 L 12 6"/>
+      <path d="M -12 0 L 12 0"/>
+      <circle cx="0" cy="0" r="5" fill="#a5f3fc" stroke="none"/>
+    </g>
+    <text x="80" y="78" font-size="17" font-weight="700" fill="#67e8f9" text-anchor="middle">Connect</text>
+    <text x="80" y="100" font-size="12" fill="#94a3b8" text-anchor="middle">Live Binance prices</text>
+    <text x="80" y="118" font-size="12" fill="#94a3b8" text-anchor="middle">&amp; your API keys</text>
+    <circle cx="80" cy="-40" r="16" fill="#22d3ee"/>
+    <text x="80" y="-34" font-size="16" font-weight="800" fill="#020617" text-anchor="middle">1</text>
+  </g>
+
+  <!-- ===== STEP 2: Strategy ===== -->
+  <g transform="translate(290,170)">
+    <circle cx="80" cy="-30" r="0" fill="#a855f7" opacity="0.25"><animate attributeName="r" values="0;46;0" dur="3s" begin="0.6s" repeatCount="indefinite"/></circle>
+    <rect x="0" y="-40" width="160" height="180" rx="18" fill="#0f172a" stroke="#1e293b" stroke-width="1.5" filter="url(#cardglow)"/>
+    <circle cx="80" cy="14" r="32" fill="url(#violet)"/>
+    <!-- strategy / chart icon -->
+    <g transform="translate(80,14)" stroke="#ddd6fe" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="-13,8 -5,-2 2,4 13,-10"/>
+      <circle cx="13" cy="-10" r="2.5" fill="#ddd6fe" stroke="none"/>
+    </g>
+    <text x="80" y="78" font-size="17" font-weight="700" fill="#c4b5fd" text-anchor="middle">Pick Strategy</text>
+    <text x="80" y="100" font-size="12" fill="#94a3b8" text-anchor="middle">EMA &#183; MACD &#183; BB</text>
+    <text x="80" y="118" font-size="12" fill="#94a3b8" text-anchor="middle">RSI &#183; Golden &#183; Super</text>
+    <circle cx="80" cy="-40" r="16" fill="#a855f7"/>
+    <text x="80" y="-34" font-size="16" font-weight="800" fill="#020617" text-anchor="middle">2</text>
+  </g>
+
+  <!-- ===== STEP 3: Backtest ===== -->
+  <g transform="translate(510,170)">
+    <circle cx="80" cy="-30" r="0" fill="#22c55e" opacity="0.25"><animate attributeName="r" values="0;46;0" dur="3s" begin="1.2s" repeatCount="indefinite"/></circle>
+    <rect x="0" y="-40" width="160" height="180" rx="18" fill="#0f172a" stroke="#1e293b" stroke-width="1.5" filter="url(#cardglow)"/>
+    <circle cx="80" cy="14" r="32" fill="url(#green)"/>
+    <!-- rewind/backtest icon -->
+    <g transform="translate(80,14)" fill="#bbf7d0">
+      <polygon points="2,-11 -11,0 2,11"/>
+      <polygon points="15,-11 2,0 15,11"/>
+    </g>
+    <text x="80" y="78" font-size="17" font-weight="700" fill="#86efac" text-anchor="middle">Backtest</text>
+    <text x="80" y="100" font-size="12" fill="#94a3b8" text-anchor="middle">2 yrs real history</text>
+    <text x="80" y="118" font-size="12" fill="#94a3b8" text-anchor="middle">win% &#183; PF &#183; drawdown</text>
+    <circle cx="80" cy="-40" r="16" fill="#22c55e"/>
+    <text x="80" y="-34" font-size="16" font-weight="800" fill="#020617" text-anchor="middle">3</text>
+  </g>
+
+  <!-- ===== STEP 4: Deploy Bot ===== -->
+  <g transform="translate(730,170)">
+    <circle cx="80" cy="-30" r="0" fill="#f59e0b" opacity="0.25"><animate attributeName="r" values="0;46;0" dur="3s" begin="1.8s" repeatCount="indefinite"/></circle>
+    <rect x="0" y="-40" width="160" height="180" rx="18" fill="#0f172a" stroke="#1e293b" stroke-width="1.5" filter="url(#cardglow)"/>
+    <circle cx="80" cy="14" r="32" fill="url(#amber)"/>
+    <!-- bot icon -->
+    <g transform="translate(80,14)" stroke="#fde68a" stroke-width="3" fill="none" stroke-linecap="round">
+      <rect x="-11" y="-6" width="22" height="16" rx="4"/>
+      <line x1="0" y1="-6" x2="0" y2="-13"/>
+      <circle cx="0" cy="-15" r="2.5" fill="#fde68a" stroke="none"/>
+      <circle cx="-4" cy="2" r="1.8" fill="#fde68a" stroke="none"/>
+      <circle cx="4" cy="2" r="1.8" fill="#fde68a" stroke="none"/>
+    </g>
+    <text x="80" y="78" font-size="17" font-weight="700" fill="#fcd34d" text-anchor="middle">Deploy Bots</text>
+    <text x="80" y="100" font-size="12" fill="#94a3b8" text-anchor="middle">Many bots at once</text>
+    <text x="80" y="118" font-size="12" fill="#94a3b8" text-anchor="middle">TP1 / TP2 / trailing</text>
+    <circle cx="80" cy="-40" r="16" fill="#f59e0b"/>
+    <text x="80" y="-34" font-size="16" font-weight="800" fill="#020617" text-anchor="middle">4</text>
+  </g>
+
+  <!-- ===== STEP 5: Monitor ===== -->
+  <g transform="translate(950,170)">
+    <circle cx="80" cy="-30" r="0" fill="#f43f5e" opacity="0.25"><animate attributeName="r" values="0;46;0" dur="3s" begin="2.4s" repeatCount="indefinite"/></circle>
+    <rect x="0" y="-40" width="160" height="180" rx="18" fill="#0f172a" stroke="#1e293b" stroke-width="1.5" filter="url(#cardglow)"/>
+    <circle cx="80" cy="14" r="32" fill="url(#rose)"/>
+    <!-- bell/monitor icon -->
+    <g transform="translate(80,14)" stroke="#fecdd3" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M -9 6 Q -9 -10 0 -10 Q 9 -10 9 6 Z"/>
+      <path d="M -3 10 Q 0 13 3 10"/>
+    </g>
+    <text x="80" y="78" font-size="17" font-weight="700" fill="#fda4af" text-anchor="middle">Monitor</text>
+    <text x="80" y="100" font-size="12" fill="#94a3b8" text-anchor="middle">Alerts &#183; Telegram</text>
+    <text x="80" y="118" font-size="12" fill="#94a3b8" text-anchor="middle">Analytics &#183; AI advice</text>
+    <circle cx="80" cy="-40" r="16" fill="#f43f5e"/>
+    <text x="80" y="-34" font-size="16" font-weight="800" fill="#020617" text-anchor="middle">5</text>
+  </g>
+
+  <!-- moving pulse dot along the flow -->
+  <circle r="6" fill="#ffffff" filter="url(#cardglow)">
+    <animate attributeName="cx" values="150;1050" dur="4s" repeatCount="indefinite"/>
+    <animate attributeName="cy" values="250;250" dur="4s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;1;1;1;0" dur="4s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- bottom: safety bar -->
+  <g transform="translate(150,420)">
+    <rect x="0" y="0" width="900" height="80" rx="16" fill="#0f172a" stroke="#1e293b" stroke-width="1.5"/>
+    <text x="30" y="34" font-size="15" font-weight="700" fill="#cbd5e1">Built-in safety on every trade</text>
+    <g font-size="13" font-weight="600">
+      <g transform="translate(30,50)"><circle cx="6" cy="6" r="5" fill="#22c55e"/><text x="20" y="11" fill="#94a3b8">Daily loss limit halts bots</text></g>
+      <g transform="translate(250,50)"><circle cx="6" cy="6" r="5" fill="#22d3ee"/><text x="20" y="11" fill="#94a3b8">Break-even stop after TP1</text></g>
+      <g transform="translate(480,50)"><circle cx="6" cy="6" r="5" fill="#a855f7"/><text x="20" y="11" fill="#94a3b8">Demo mode &#183; no real money</text></g>
+      <g transform="translate(710,50)"><circle cx="6" cy="6" r="5" fill="#f59e0b"/><text x="20" y="11" fill="#94a3b8">Keys masked &amp; encrypted</text></g>
+    </g>
+  </g>
+</svg>
