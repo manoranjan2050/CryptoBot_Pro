@@ -16,6 +16,10 @@ if hasattr(sys.stderr, 'reconfigure'): sys.stderr.reconfigure(encoding='utf-8', 
 app = FastAPI(title="CryptoBot Pro", version="3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "service": "CryptoBot Pro"}
+
 SECRET = os.environ.get("JWT_SECRET", "cryptobot-secret-2024")
 ALGO = "HS256"
 security = HTTPBearer()
@@ -1887,6 +1891,14 @@ def ai_chat(req: ChatReq, user=Depends(current_user)):
     except Exception as e:
         raise HTTPException(500,str(e))
 
+# ── SERVE BUILT FRONTEND (production / single-service deploy) ──────────────────
+# Mounted last so all /api routes above take priority. In local dev the dist folder
+# usually doesn't exist (you run `npm run dev` separately) — guarded so it's a no-op.
+from fastapi.staticfiles import StaticFiles
+_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+if os.path.isdir(_DIST):
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="frontend")
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), reload=False)

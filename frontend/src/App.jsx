@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 
-const API = "http://localhost:8000";
+// "" → same-origin (production: FastAPI serves this app; dev: Vite proxies /api → :8000).
+// Override with VITE_API_URL for a split frontend/backend deploy.
+const API = import.meta.env.VITE_API_URL ?? "";
 function api(path, opts = {}, token) {
   return fetch(`${API}${path}`, {
     ...opts,

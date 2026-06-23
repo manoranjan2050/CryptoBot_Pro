@@ -159,6 +159,27 @@ cd CryptoBot_Pro && chmod +x start.sh && ./start.sh
 
 ---
 
+## ☁️ Deploy to the Cloud (free)
+
+The whole app runs as **one service** — FastAPI serves both the API and the built React frontend, so you get a single public URL.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/manoranjan2050/CryptoBot_Pro)
+
+**One-click (Render):**
+1. Click the button above (or [render.com](https://render.com) → **New → Blueprint** → connect this repo)
+2. Render reads [`render.yaml`](render.yaml), builds the [`Dockerfile`](Dockerfile), and deploys
+3. Open the generated URL → log in with `demo` / `demo123`
+
+**What's included:** multi-stage Docker build (Node builds the frontend → Python serves it), a `/api/health` check, and an auto-generated `JWT_SECRET`.
+
+> **⚠️ Free-tier notes**
+> - **GitHub Pages won't work** — it only hosts static files and can't run the Python backend. Use Render (or Railway / Fly.io / any host that runs Docker or Python).
+> - Free instances **sleep after ~15 min idle** → trading bots pause until the next request wakes the service. For 24/7 bots, use a paid always-on instance or a small VPS.
+> - SQLite lives on **ephemeral disk** — data resets on redeploy. Add a Render Disk or external Postgres for persistence.
+> - Binance may rate-limit/geo-block some datacenter IPs, so live market data can be flaky from free cloud regions.
+
+---
+
 ## 📐 Strategy Library
 
 Six battle-tested strategies, available for every bot and the backtester:
